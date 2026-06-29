@@ -1,4 +1,10 @@
-# CLAUDE.md — Règles du projet
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+---
+
+## Règles du projet
 
 ## Contexte
 
@@ -50,3 +56,59 @@ L'évaluateur regarde : est-ce que ça tourne en live, qualité du code (structu
 ## Rôles
 
 Le pilotage humain est assuré par le CTO (Mathis). Les tâches sont suivies dans `TASKS.md`. Les subagents disponibles sont dans `.claude/agents/`. Voir leurs descriptions pour savoir quand déléguer.
+
+---
+
+## Commandes de développement
+
+Ces commandes s'appliquent une fois le squelette créé par l'agent `architect`.
+
+### Backend (FastAPI)
+
+```bash
+cd backend
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env          # puis renseigner MISTRAL_API_KEY
+uvicorn app.main:app --reload  # http://localhost:8000
+```
+
+Point d'entrée API : `POST http://localhost:8000/analyze` avec body `{ "url": "stripe.com" }`.
+
+### Frontend (Vue 3 + Vite)
+
+```bash
+cd frontend
+npm install
+cp .env.example .env.local    # VITE_API_URL=http://localhost:8000
+npm run dev                    # http://localhost:5173
+npm run build                  # build de prod
+```
+
+---
+
+## Structure des modules backend
+
+Chaque fichier a une responsabilité unique — ne pas mélanger.
+
+| Fichier | Rôle |
+|---|---|
+| `app/main.py` | Route FastAPI `POST /analyze`, CORS, orchestration de la pipeline |
+| `app/scraper.py` | Fetch httpx + extraction BeautifulSoup, normalisation URL |
+| `app/tech_detector.py` | Détection stack (signatures HTML + headers) |
+| `app/gtm_detector.py` | Détection signaux GTM (chat, pixels, analytics, pricing, démo) |
+| `app/profiler.py` | Appel Mistral, JSON forcé, parsing défensif, fallback |
+| `app/scorer.py` | Score pondéré "fit B2B SaaS", breakdown explicable |
+| `app/models.py` | Modèles Pydantic entrée/sortie |
+
+La route `main.py` appelle les modules dans l'ordre scraper → tech_detector → gtm_detector → profiler → scorer et assemble `CompanyAnalysis`. Aucun module n'importe un autre module métier : seul `main.py` orchestre.
+
+---
+
+## Variables d'environnement requises
+
+| Variable | Où | Usage |
+|---|---|---|
+| `MISTRAL_API_KEY` | backend `.env` | Appel LLM Profiler |
+| `ALLOWED_ORIGINS` | backend `.env` | CORS (url Netlify en prod) |
+| `VITE_API_URL` | frontend `.env.local` | URL du backend appelé par Vue |
