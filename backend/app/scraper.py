@@ -8,7 +8,9 @@ detection ou d'inference ici.
 
 from __future__ import annotations
 
+import ipaddress
 import re
+import socket
 from typing import TypedDict
 from urllib.parse import urljoin, urlparse
 
@@ -70,6 +72,48 @@ class ScrapedData(TypedDict):
 # ---------------------------------------------------------------------------
 # Fonctions utilitaires privees
 # ---------------------------------------------------------------------------
+
+
+def _check_ssrf(hostname: str) -> None:
+    """
+    Resout le hostname et rejette toute IP dans un range non-routable ou interne.
+
+    Protege contre le SSRF : un attaquant ne peut pas pointer vers des services
+    internes (169.254.169.254, loopback, reseau prive Render, etc.).
+    Appeler avant chaque fetch, y compris apres chaque redirection.
+
+    Args:
+        hostname: nom d'hote a verifier (sans schema ni path).
+
+    Raises:
+        ValueError: si l'une des IPs resolues est dans un range bloque.
+        socket.gaierror: si le hostname est injoignable (DNS).
+    """
+    try:
+        results = socket.getaddrinfo(hostname, None)
+    except socket.gaierror:
+        # Laisse remonter — sera traduit en 503 par main.py via ConnectError
+        raise
+
+    for res in results:
+        raw_ip = res[4][0]
+        try:
+            ip = ipaddress.ip_address(raw_ip)
+        except ValueError:
+            continue
+
+        if (
+            ip.is_loopback
+            or ip.is_private
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
+            raise ValueError(
+                f"URL bloquee : l'adresse IP resolue ({ip}) pour '{hostname}' "
+                "n'est pas autorisee (reseau prive, loopback ou adresse reservee)."
+            )
 
 
 def _normalize_url(raw_url: str) -> str:
@@ -290,20 +334,41 @@ def scrape(url: str) -> ScrapedData:
     # Etape 1 : normalisation de l'URL (peut lever ValueError)
     normalized_url = _normalize_url(url)
 
-    # Etape 2 : fetch HTTP avec httpx
-    # Toutes les exceptions httpx remontent directement a l'appelant
+    # Etape 2 : fetch HTTP avec gestion manuelle des redirections
+    # follow_redirects=False intentionnel : on re-valide le hostname a chaque saut
+    # pour empecher une redirection vers un reseau interne (SSRF via redirect).
     headers = {"User-Agent": USER_AGENT}
+    current_url = normalized_url
+    hops = 0
 
     with httpx.Client(
         timeout=HTTP_TIMEOUT,
-        follow_redirects=True,
-        max_redirects=MAX_REDIRECTS,
+        follow_redirects=False,
         headers=headers,
     ) as client:
-        response = client.get(normalized_url)
+        while True:
+            parsed_current = urlparse(current_url)
+            _check_ssrf(parsed_current.hostname or "")
 
-        # Lever httpx.HTTPStatusError si le code est 4xx ou 5xx
-        response.raise_for_status()
+            response = client.get(current_url)
+
+            if response.is_redirect:
+                if hops >= MAX_REDIRECTS:
+                    raise httpx.TooManyRedirects(
+                        f"Trop de redirections (>{MAX_REDIRECTS}) pour {normalized_url}",
+                        request=response.request,
+                    )
+                location = response.headers.get("location", "")
+                if not location:
+                    break
+                current_url = str(httpx.URL(current_url).copy_with()).rstrip("/")
+                current_url = urljoin(current_url + "/", location)
+                hops += 1
+                continue
+
+            # Lever httpx.HTTPStatusError si le code est 4xx ou 5xx
+            response.raise_for_status()
+            break
 
         # Capturer les donnees pendant que la connexion est ouverte
         html_content: str = response.text
