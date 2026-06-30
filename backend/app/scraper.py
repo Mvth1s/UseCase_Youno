@@ -35,6 +35,9 @@ HTTP_TIMEOUT: int = 10
 # Nombre maximum de redirections suivies
 MAX_REDIRECTS: int = 5
 
+# Taille maximale du body accepte (5 Mo) — protege contre les reponses geantes
+MAX_RESPONSE_SIZE: int = 5 * 1024 * 1024
+
 # User-agent realiste pour eviter les blocages basiques anti-bot
 USER_AGENT: str = "Mozilla/5.0 (compatible; KonsoleBot/1.0; +https://konsole.ai)"
 
@@ -341,6 +344,12 @@ def scrape(url: str) -> ScrapedData:
     current_url = normalized_url
     hops = 0
 
+    html_content: str = ""
+    final_url: str = normalized_url
+    status_code: int = 0
+    response_headers: dict[str, str] = {}
+    content_type: str = ""
+
     with httpx.Client(
         timeout=HTTP_TIMEOUT,
         follow_redirects=False,
@@ -350,32 +359,46 @@ def scrape(url: str) -> ScrapedData:
             parsed_current = urlparse(current_url)
             _check_ssrf(parsed_current.hostname or "")
 
-            response = client.get(current_url)
+            # Streaming : les headers arrivent immediatement, le body est lu chunk par chunk
+            with client.stream("GET", current_url) as response:
+                if response.is_redirect:
+                    if hops >= MAX_REDIRECTS:
+                        raise httpx.TooManyRedirects(
+                            f"Trop de redirections (>{MAX_REDIRECTS}) pour {normalized_url}",
+                            request=response.request,
+                        )
+                    location = response.headers.get("location", "")
+                    if not location:
+                        response.raise_for_status()
+                        break
+                    current_url = urljoin(current_url, location)
+                    hops += 1
+                    continue
 
-            if response.is_redirect:
-                if hops >= MAX_REDIRECTS:
-                    raise httpx.TooManyRedirects(
-                        f"Trop de redirections (>{MAX_REDIRECTS}) pour {normalized_url}",
-                        request=response.request,
-                    )
-                location = response.headers.get("location", "")
-                if not location:
-                    break
-                current_url = str(httpx.URL(current_url).copy_with()).rstrip("/")
-                current_url = urljoin(current_url + "/", location)
-                hops += 1
-                continue
+                # Reponse finale : verifier le statut et lire le body avec limite
+                response.raise_for_status()
 
-            # Lever httpx.HTTPStatusError si le code est 4xx ou 5xx
-            response.raise_for_status()
-            break
+                response_headers = dict(response.headers)
+                content_type = response_headers.get("content-type", "")
+                final_url = str(response.url)
+                status_code = response.status_code
 
-        # Capturer les donnees pendant que la connexion est ouverte
-        html_content: str = response.text
-        final_url: str = str(response.url)
-        status_code: int = response.status_code
-        response_headers: dict[str, str] = dict(response.headers)
-        content_type: str = response_headers.get("content-type", "")
+                # Lire le body chunk par chunk — rejette les reponses > MAX_RESPONSE_SIZE
+                # sans les charger entierement en memoire (protege contre memory amplification)
+                chunks: list[bytes] = []
+                total_bytes = 0
+                for chunk in response.iter_bytes(chunk_size=8192):
+                    total_bytes += len(chunk)
+                    if total_bytes > MAX_RESPONSE_SIZE:
+                        raise ValueError(
+                            f"Page trop volumineuse (> {MAX_RESPONSE_SIZE // (1024 * 1024)} Mo). "
+                            f"URL: {normalized_url}"
+                        )
+                    chunks.append(chunk)
+
+                encoding = response.encoding or "utf-8"
+                html_content = b"".join(chunks).decode(encoding, errors="replace")
+                break
 
     # Etape 3 : verifier que le contenu est du HTML
     # (evite de parser des PDFs, images, flux JSON, etc.)
