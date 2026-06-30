@@ -1,0 +1,40 @@
+name: Backend CI
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "backend/**"
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "backend/**"
+
+jobs:
+  lint-and-check:
+    name: Syntax & import check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        working-directory: backend
+        run: pip install -r requirements.txt
+
+      - name: Check syntax (py_compile)
+        working-directory: backend
+        run: python -m py_compile app/main.py app/scraper.py app/tech_detector.py app/gtm_detector.py app/profiler.py app/scorer.py app/models.py
+
+      - name: Verify imports
+        working-directory: backend
+        env:
+          MISTRAL_API_KEY: dummy-key-for-ci
+        run: python -c "from app.main import app; from app.scorer import compute_score; from app.tech_detector import detect_tech_stack; from app.gtm_detector import detect_gtm_signals; print('All imports OK')"
