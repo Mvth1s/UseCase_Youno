@@ -94,9 +94,9 @@ def _check_ssrf(hostname: str) -> None:
     """
     try:
         results = socket.getaddrinfo(hostname, None)
-    except socket.gaierror:
-        # Laisse remonter — sera traduit en 503 par main.py via ConnectError
-        raise
+    except socket.gaierror as exc:
+        # Convertit en httpx.ConnectError pour que main.py ait une surface d'exception uniforme
+        raise httpx.ConnectError(f"Domaine injoignable : {hostname}") from exc
 
     for res in results:
         raw_ip = res[4][0]
