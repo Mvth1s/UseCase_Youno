@@ -1,29 +1,93 @@
-# Youno / Konsole - Company Analyzer
+# Konsole Company Analyzer
 
-Application web qui analyse un site (ex. `stripe.com`) et renvoie : nom, description, tech stack, signaux GTM, secteur, taille, et un score "fit B2B SaaS".
+**Application live :** https://usecaseyouno.netlify.app | **Backend :** https://usecase-youno.onrender.com | **Repo :** https://github.com/Mvth1s/UseCase_Youno
 
-## Presentation
+Outil d'analyse de sites web qui prend une URL (ex. `stripe.com`) et renvoie en quelques secondes le profil de l'entreprise, sa tech stack, ses signaux Go-To-Market et un score de fit "B2B SaaS" -- concu comme une brique de qualification de prospects pour Konsole, la plateforme Revenue Engineering de Youno.
 
-Pipeline sequentielle cote serveur : collecte HTTP (httpx + BeautifulSoup) → detection tech stack → detection signaux GTM → profiling LLM (Mistral) → scoring pondere. Un seul appel LLM dans toute la chaine pour maitriser cout, latence et risque de panne.
+---
+
+## Sens produit
+
+Pour un commercial sur Konsole, qualifier un prospect commence par repondre a trois questions : qu'est-ce que cette entreprise fait, comment est-elle organisee, et investit-elle deja dans des outils marketing et sales ?
+
+Cet outil repond automatiquement a ces questions a partir de l'URL du site :
+
+- **Tech stack** : une entreprise sur Next.js + Cloudflare + Stripe a une equipe technique mature et un produit en production. C'est un signal de maturite produit, donc de capacite a adopter un outil SaaS supplementaire.
+- **Signaux GTM** : la presence d'un LinkedIn Insight Tag indique que l'entreprise achete de la publicite B2B. Un Intercom ou un Drift indique un investissement dans l'engagement client. Une page `/pricing` publique indique un SaaS avec un cycle de vente accessible et une tarification formalisee.
+- **Score B2B SaaS (0-100)** : synthese ponderee de ces signaux en un seul chiffre actionnable, accompagne d'un label qualitatif ("Cible ideale B2B SaaS", "Fort potentiel B2B", etc.) et du detail de chaque facteur. Un commercial peut lire le score en trois secondes et comprendre pourquoi en dix.
+
+---
 
 ## Architecture
 
+### Pipeline sequentielle
+
 ```
-UseCase_Youno/
-  backend/         FastAPI (Python 3.11)
-    app/
-      main.py      Route POST /analyze + CORS + orchestration pipeline
-      scraper.py   Fetch httpx + extraction BeautifulSoup
-      tech_detector.py  Detection stack (HTML + headers)
-      gtm_detector.py   Detection signaux GTM (chat, pixels, analytics)
-      profiler.py  Appel Mistral, JSON force, parsing defensif
-      scorer.py    Score pondere "fit B2B SaaS" explicable
-      models.py    Modeles Pydantic entree/sortie
-  frontend/        Vue 3 + Vite
-    src/App.vue    Interface principale
+URL saisie
+    |
+    v
+[scraper.py]          Fetch HTTP (httpx), extraction BeautifulSoup
+    |                 Sortie : HTML, title, meta, OG, liens, texte visible
+    |
+    v
+[tech_detector.py]    Signatures dans le HTML et les headers HTTP
+    |                 Sortie : frameworks, CDN, CMS, serveur, analytics, tag managers
+    |
+    v
+[gtm_detector.py]     Signatures GTM dans le HTML et les liens internes
+    |                 Sortie : chat, pixels, analytics, pricing, demo, careers
+    |
+    v
+[profiler.py]         Seul appel LLM (Mistral) -- JSON force, parsing defensif
+    |                 Sortie : nom, description, secteur, taille, audience
+    |
+    v
+[scorer.py]           Regles ponderees, aucun LLM
+    |                 Sortie : score 0-100, label, breakdown des 8 facteurs
+    |
+    v
+CompanyAnalysis       Reponse JSON complete renvoyee par POST /analyze
 ```
 
-## Lancement local
+Chaque etape produit un objet structure consomme par l'etape suivante. Seul `main.py` orchestre la pipeline -- aucun module metier n'en importe un autre.
+
+### Modules
+
+| Fichier | Responsabilite |
+|---|---|
+| `app/main.py` | Route `POST /analyze`, configuration CORS, orchestration de la pipeline |
+| `app/scraper.py` | Normalisation URL, fetch httpx avec gestion manuelle des redirections, extraction BeautifulSoup, protection SSRF |
+| `app/tech_detector.py` | Detection tech stack par signatures HTML et headers HTTP |
+| `app/gtm_detector.py` | Detection signaux GTM (outils de chat, pixels publicitaires, analytics, pages cles) |
+| `app/profiler.py` | Appel API Mistral, sortie JSON forcee, parsing defensif en trois passes, fallback sur metadonnees |
+| `app/scorer.py` | Calcul du score "fit B2B SaaS" par regles ponderees, breakdown des 8 facteurs |
+| `app/models.py` | Modeles Pydantic pour la validation des entrees et la serialisation des sorties |
+
+---
+
+## Choix techniques
+
+**Vue 3 + Vite** -- Framework front maîtrise, configuration zero-friction, build optimise en quelques secondes. Pour une SPA d'une seule page, ajouter Nuxt ou un routeur aurait ete une surcouche injustifiee. Vite 8 propose un build tres rapide avec des bundles optimises sans configuration supplementaire.
+
+**FastAPI** -- Typage natif via Pydantic, documentation Swagger generee automatiquement, validation stricte des entrees/sorties. Idéal pour un endpoint unique avec un contrat d'API formalise. La gestion des erreurs explicite (HTTP 400/503 selon la cause) est triviale a implementer avec les `HTTPException` FastAPI.
+
+**Mistral AI** -- Un seul appel LLM dans toute la chaine (le module `profiler.py`). Ce choix est delibere : il limite le cout (une requete Mistral par analyse), la latence (pas de chaine d'agents), et le risque de panne (les etapes de detection sont 100 % non-LLM et toujours disponibles). `mistral-small-latest` offre un bon ratio qualite/cout/latence pour une tache de qualification structuree avec JSON force.
+
+**httpx + BeautifulSoup** -- httpx permet le controle fin des redirections, necessaire pour la protection anti-SSRF (chaque saut de redirection est revalide). Le streaming du body limite la consommation memoire sur les pages volumineuses. BeautifulSoup avec le parseur `html.parser` est robuste sans dependance systeme. Playwright ou Selenium n'ont pas ete retenus : le rendu JavaScript ajoute plusieurs secondes de latence et complexifie considerablement le deploiement, pour un gain marginal sur la majorite des sites.
+
+**Detection par signatures (non-LLM)** -- Toute la detection tech stack et GTM repose sur des correspondances de patterns dans le HTML brut et les headers HTTP. Ce choix garantit la transparence (chaque resultat est la preuve directe d'une signature presente dans la source), la vitesse (pas d'appel reseau supplementaire), et l'extensibilite (ajouter un outil = ajouter une ligne dans la liste correspondante, sans modifier la logique de detection).
+
+**Netlify + Render** -- Netlify pour le frontend : deploiement automatique depuis Git, CDN mondial, TLS et redirections SPA configures par `netlify.toml`. Render pour le backend : deploiement depuis `render.yaml` (Blueprint), restart automatique, plan gratuit suffisant pour un MVP.
+
+---
+
+## Lancement en local
+
+### Prerequis
+
+- Python 3.11 ou superieur
+- Node.js 20 ou superieur
+- Une cle API Mistral (https://console.mistral.ai)
 
 ### Backend
 
@@ -31,8 +95,19 @@ UseCase_Youno/
 cd backend
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env          # renseigner MISTRAL_API_KEY
+cp .env.example .env          # puis renseigner MISTRAL_API_KEY dans .env
 uvicorn app.main:app --reload  # http://localhost:8000
+```
+
+Verification :
+
+```bash
+curl http://localhost:8000/health
+# {"status":"ok"}
+
+curl -X POST http://localhost:8000/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"url": "stripe.com"}'
 ```
 
 ### Frontend
@@ -44,84 +119,114 @@ cp .env.example .env.local    # VITE_API_URL=http://localhost:8000
 npm run dev                    # http://localhost:5173
 ```
 
+---
+
+## Variables d'environnement
+
+| Variable | Fichier | Usage |
+|---|---|---|
+| `MISTRAL_API_KEY` | `backend/.env` | Cle d'authentification pour l'API Mistral |
+| `ALLOWED_ORIGINS` | `backend/.env` | Origines CORS autorisees (URL Netlify en production, `*` en developpement local) |
+| `VITE_API_URL` | `frontend/.env.local` | URL du backend appelee par Vue |
+
+Les fichiers `.env.example` dans chaque dossier contiennent les valeurs par defaut pour le developpement local.
+
+---
+
 ## Deploiement
 
 ### Ordre obligatoire
 
-Deployer le backend Render en premier, puis le frontend Netlify, puis revenir sur Render pour injecter l'URL Netlify dans ALLOWED_ORIGINS.
+1. Deployer le backend sur Render (obtenir l'URL generee)
+2. Deployer le frontend sur Netlify (injecter l'URL Render dans `VITE_API_URL`)
+3. Revenir sur Render pour renseigner `ALLOWED_ORIGINS` avec l'URL Netlify
 
 ### Backend (Render)
 
-1. Aller sur [render.com](https://render.com) → **New** → **Web Service** → connecter le repo GitHub `Mvth1s/UseCase_Youno`.
+1. render.com -> **New** -> **Web Service** -> connecter le repo GitHub `Mvth1s/UseCase_Youno`
 2. Render detecte `backend/render.yaml` automatiquement (Blueprint). Si ce n'est pas le cas, renseigner manuellement :
    - **Root directory** : `backend`
    - **Build command** : `pip install -r requirements.txt`
    - **Start command** : `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
    - **Health check path** : `/health`
-3. Dans l'onglet **Environment** du service, ajouter les variables :
-   - `MISTRAL_API_KEY` : votre cle API Mistral
+3. Dans l'onglet **Environment**, ajouter les variables :
+   - `MISTRAL_API_KEY` : la cle API Mistral
    - `ALLOWED_ORIGINS` : laisser vide pour l'instant (a remplir apres le deploiement Netlify)
    - `PYTHON_VERSION` : `3.11.0`
-4. Cliquer **Deploy**. Copier l'URL generee, ex. `https://konsole-analyzer-backend.onrender.com`.
+4. Cliquer **Deploy**. Copier l'URL generee (ex. `https://usecase-youno.onrender.com`).
 
 ### Frontend (Netlify)
 
-1. Aller sur [netlify.com](https://netlify.com) → **Add new site** → **Import from Git** → connecter le repo GitHub.
+1. netlify.com -> **Add new site** -> **Import from Git** -> connecter le repo GitHub
 2. Netlify detecte `frontend/netlify.toml`. Verifier les parametres :
    - **Base directory** : `frontend`
    - **Build command** : `npm run build`
    - **Publish directory** : `frontend/dist`
-3. Dans **Site configuration** → **Environment variables**, ajouter :
-   - `VITE_API_URL` : l'URL Render copiee a l'etape precedente (ex. `https://konsole-analyzer-backend.onrender.com`)
-4. Cliquer **Deploy site**. Copier l'URL generee, ex. `https://konsole-analyzer.netlify.app`.
+3. Dans **Site configuration** -> **Environment variables**, ajouter :
+   - `VITE_API_URL` : l'URL Render copiee a l'etape precedente
+4. Cliquer **Deploy site**. Copier l'URL generee (ex. `https://usecaseyouno.netlify.app`).
 
 ### Finalisation CORS
 
-1. Retourner sur Render → **Environment** du service backend.
-2. Mettre a jour `ALLOWED_ORIGINS` avec l'URL Netlify exacte (ex. `https://konsole-analyzer.netlify.app`).
-3. Cliquer **Save changes** → Render redeploit automatiquement.
+1. Retourner sur Render -> onglet **Environment** du service backend
+2. Mettre a jour `ALLOWED_ORIGINS` avec l'URL Netlify exacte
+3. Cliquer **Save changes** -> Render redeploit automatiquement
 
-### Verification de bout en bout
+### Cold start Render (free tier)
 
-```bash
-# Health check backend
-curl https://konsole-analyzer-backend.onrender.com/health
+Render endort les services gratuits apres 15 minutes d'inactivite. Le premier appel apres une periode de sommeil prend 30 a 60 secondes. Le frontend affiche un etat de chargement explicite et un timeout de 60 secondes pour absorber ce delai cote utilisateur.
 
-# Test analyze
-curl -X POST https://konsole-analyzer-backend.onrender.com/analyze \
-  -H "Content-Type: application/json" \
-  -d '{"url": "stripe.com"}'
-```
-
-## Cold start Render (free tier)
-
-Le free tier Render endort les services apres 15 minutes d'inactivite. Le premier appel apres une periode de sommeil prend 30 a 60 secondes.
-
-**Mitigation : script de warm-up**
+Pour maintenir le backend eveille, un script de warm-up est inclus :
 
 ```bash
-python backend/warmup.py https://konsole-analyzer-backend.onrender.com
+python backend/warmup.py https://usecase-youno.onrender.com
 ```
 
-Ce script ping `/health` toutes les 14 minutes. Il peut tourner localement ou etre configure comme cron sur [cron-job.org](https://cron-job.org) (gratuit).
+Ce script ping `/health` toutes les 14 minutes. Il peut tourner localement ou etre configure comme cron gratuit sur cron-job.org ou UptimeRobot.
 
-Alternative sans hebergement : configurer un moniteur gratuit sur [UptimeRobot](https://uptimerobot.com) avec une frequence de 5 minutes sur l'URL `/health`.
+---
 
-Le frontend affiche un etat de chargement explicite pour absorber ce delai cote utilisateur.
+## Structure du repo
 
-## Choix techniques
+```
+UseCase_Youno/
+|
++-- backend/                  FastAPI (Python 3.11)
+|   +-- app/
+|   |   +-- main.py           Route POST /analyze, CORS, orchestration pipeline
+|   |   +-- scraper.py        Fetch httpx + extraction BeautifulSoup + protection SSRF
+|   |   +-- tech_detector.py  Detection stack par signatures HTML et headers
+|   |   +-- gtm_detector.py   Detection signaux GTM (chat, pixels, analytics, pages cles)
+|   |   +-- profiler.py       Appel Mistral, JSON force, parsing defensif, fallback
+|   |   +-- scorer.py         Score pondere "fit B2B SaaS", breakdown explicable
+|   |   +-- models.py         Modeles Pydantic entree/sortie
+|   +-- requirements.txt      Dependances Python (FastAPI, httpx, BeautifulSoup, Pydantic)
+|   +-- render.yaml           Configuration Blueprint Render
+|   +-- warmup.py             Script de warm-up anti-cold-start
+|   +-- API_CONTRACT.md       Contrat JSON complet entre frontend et backend
+|   +-- .env.example          Template des variables d'environnement
+|
++-- frontend/                 Vue 3 + Vite
+|   +-- src/
+|   |   +-- App.vue           Interface principale (formulaire + 4 sections de resultats)
+|   |   +-- main.js           Point d'entree Vue
+|   +-- netlify.toml          Configuration de deploiement Netlify
+|   +-- .env.example          Template des variables d'environnement
+|
++-- CLAUDE.md                 Instructions pour les agents Claude Code
++-- TASKS.md                  Suivi des taches (CTO)
+```
 
-- **Un seul appel LLM** (Mistral) dans toute la chaine : maitrise du cout et de la latence.
-- **httpx synchrone** dans le scraper : suffisant pour un endpoint unitaire, evite la complexite async.
-- **Pydantic v2** pour les modeles entree/sortie : validation stricte, serialisation JSON fiable.
-- **CORS configurable par variable d'environnement** : pas de domaine harde en dur dans le code.
+---
 
-## Limites connues
+## Limites actuelles et pistes d'amelioration
 
-- Le free tier Render entraine un cold start (voir ci-dessus).
-- Les sites avec protection anti-bot (Cloudflare, etc.) peuvent retourner un contenu vide ou une erreur 503.
-- L'analyse LLM peut varier selon la reponse du modele ; le parsing defensif garantit un fallback propre.
+**Cold start Render (free tier).** Le premier appel apres une periode d'inactivite prend 30 a 60 secondes. Solvable en passant sur le plan payant Render ($7/mois) ou en configurant un cron de warm-up persistant. En production reelle, ce n'est pas un probleme.
 
-## Sens produit
+**Sites JavaScript-only non rendus.** Le scraper fetch le HTML statique. Les SPA sans SSR et les sites dont le contenu est charge entierement en AJAX retournent une page quasi vide au scraper. La solution serait d'integrer Playwright en mode optionnel, active uniquement si le HTML retourne est trop court. Non implemente ici car cela alourdit le deploiement et allonge la latence de plusieurs secondes.
 
-Cet outil repond au besoin d'un commercial Konsole qui veut qualifier rapidement un prospect : est-ce un SaaS B2B ? Quelle stack utilisent-ils ? Ont-ils deja investi dans le marketing (pixels, chat) ? Le score synthetise ces signaux en un chiffre actionnable.
+**Couverture des signatures de detection.** Le catalogue couvre 130+ signatures pour la tech stack et les signaux GTM, mais de nouveaux outils ou des patterns d'integration atypiques peuvent passer inapercus. La detection est par nature partielle : elle identifie ce qu'elle reconnait, pas tout ce qui est present.
+
+**Fiabilite du profil LLM.** Mistral produit des resultats coherents sur la grande majorite des sites, mais peut se tromper sur le secteur ou la taille estimee pour des entreprises peu documentees ou des landing pages incompletes. Le parsing defensif garantit qu'un echec LLM ne plante pas l'analyse, mais le profil partiel resultant est moins exploitable.
+
+**Analyse limitee a la page d'accueil.** Une seule page est analysee (la racine du domaine). Une version plus avancee crawlerait les pages `/pricing`, `/about` et `/blog` pour enrichir la detection des signaux et le contexte du profiler. Cela multiplierait les appels HTTP et la latence, ce qui n'est pas justifie pour un MVP.
