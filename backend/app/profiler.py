@@ -18,6 +18,9 @@ import re
 from urllib.parse import urlparse
 
 import httpx
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from app.models import CompanyProfile
 from app.scraper import ScrapedData
