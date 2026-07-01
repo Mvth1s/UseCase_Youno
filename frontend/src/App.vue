@@ -1,1015 +1,191 @@
 <template>
-  <div class="app">
-    <header class="app-header">
-      <h1 class="app-title">Konsole <span class="title-dot">·</span> Company Analyzer</h1>
-      <p class="subtitle">Analysez n'importe quel site : profil entreprise, tech stack et signaux GTM en quelques secondes.</p>
-    </header>
+  <div class="app-shell">
+    <AppHeader />
 
-    <main class="app-main">
-
-      <!-- Formulaire de saisie -->
-      <form class="search-form" @submit.prevent="handleAnalyze">
-        <input
-          v-model="url"
-          type="text"
-          placeholder="ex. stripe.com"
-          class="url-input"
-          :disabled="loading"
-          aria-label="URL du site a analyser"
-        />
-        <button type="submit" class="analyze-btn" :disabled="loading || !url.trim()">
-          {{ loading ? 'Analyse...' : 'Analyser' }}
-        </button>
-      </form>
-
-      <!-- Analyses recentes (localStorage) -->
-      <div v-if="history.length && !loading" class="history-panel">
-        <p class="history-title">Analyses recentes</p>
-        <div class="history-list">
-          <button
-            v-for="entry in history"
-            :key="entry.url"
-            class="history-item"
-            @click="loadFromHistory(entry)"
-          >
-            <img
-              v-if="entry.favicon"
-              :src="entry.favicon"
-              class="history-favicon"
-              alt=""
-              @error="e => e.target.style.display = 'none'"
-            />
-            <span class="history-name">{{ entry.name }}</span>
-            <span class="history-score" :class="scoreColorClass(entry.score)">{{ entry.score }}/100</span>
-          </button>
-        </div>
+    <main class="app-content">
+      <!-- Idle -->
+      <div v-if="phase === 'idle'" class="idle-screen">
+        <h1 class="hero-title">Comprenez n'importe quelle entreprise<br>en un coup d'œil</h1>
+        <p class="hero-sub">Collez l'URL d'un site pour obtenir un profil structuré et un score de fit B2B SaaS en quelques secondes.</p>
+        <SearchForm v-model="url" :input-error="inputError" @submit="handleAnalyze" />
+        <HistoryPanel :history="history" @load="loadFromHistory" />
       </div>
 
-      <!-- Etat loading -->
-      <div v-if="loading" class="loading-block" role="status" aria-live="polite">
-        <div class="spinner" aria-hidden="true"></div>
-        <div class="loading-text">
-          <p class="loading-main">Analyse en cours...</p>
-          <p class="loading-sub">Le premier appel peut prendre ~30s (cold start Render)</p>
-        </div>
-      </div>
+      <!-- Chargement -->
+      <LoadingState v-else-if="phase === 'loading'" :url="url" />
 
-      <!-- Message d'erreur -->
-      <div v-if="error && !loading" class="error-block" role="alert">
-        <strong>Erreur :</strong> {{ error }}
-      </div>
+      <!-- Résultat -->
+      <ResultView
+        v-else-if="phase === 'result'"
+        :result="result"
+        :latency="latency"
+        @new-search="startNewSearch"
+      />
 
-      <!-- Resultats -->
-      <div v-if="result && !loading" class="results">
-
-        <!-- Section A : Identite -->
-        <section class="card section-identity">
-          <div class="identity-header">
-            <img
-              v-if="result.favicon_url"
-              :src="result.favicon_url"
-              class="favicon"
-              alt=""
-              @error="hideFavicon"
-            />
-            <h2 class="company-name">{{ result.profile?.name ?? result.page_title }}</h2>
-          </div>
-          <p v-if="latency" class="latency-info">Analyse en {{ latency }}s</p>
-          <p v-if="result.profile?.description" class="company-desc">{{ result.profile.description }}</p>
-          <div class="badges-row">
-            <span v-if="result.profile?.sector" class="badge badge-neutral">{{ result.profile.sector }}</span>
-            <span v-if="result.profile?.estimated_size" class="badge badge-neutral">{{ result.profile.estimated_size }}</span>
-            <span
-              v-if="result.profile?.audience"
-              class="badge"
-              :class="audienceBadgeClass(result.profile.audience)"
-            >{{ result.profile.audience }}</span>
-          </div>
-          <div class="identity-footer">
-            <a
-              v-if="result.url"
-              :href="result.url"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="result-url"
-            >{{ result.url }}</a>
-            <button class="copy-btn" @click="copyJson">
-              {{ copySuccess ? 'Copie !' : 'Copier JSON' }}
-            </button>
-          </div>
-        </section>
-
-        <!-- Grille deux colonnes (tech + GTM) sur desktop -->
-        <div class="two-col">
-
-          <!-- Section B : Tech Stack -->
-          <section class="card section-tech">
-            <h2 class="section-title">Stack technique</h2>
-            <div v-if="hasTechStack" class="tech-categories">
-              <div v-for="cat in techCategories" :key="cat.key" class="tech-cat">
-                <span class="cat-label">{{ cat.label }}</span>
-                <div class="pills-row">
-                  <span v-for="item in cat.items" :key="item" class="pill pill-default">{{ item }}</span>
-                </div>
-              </div>
-            </div>
-            <p v-else class="empty-msg">Aucune technologie detectee</p>
-          </section>
-
-          <!-- Section C : Signaux GTM -->
-          <section class="card section-gtm">
-            <div class="section-title-row">
-              <h2 class="section-title">Signaux GTM</h2>
-              <span class="badge-insight">KEY INSIGHT</span>
-            </div>
-
-            <div class="gtm-groups">
-              <div class="gtm-group">
-                <span class="cat-label">Outils de chat</span>
-                <div v-if="result.gtm_signals?.chat_tools?.length" class="pills-row">
-                  <span v-for="t in result.gtm_signals.chat_tools" :key="t" class="pill pill-chat">{{ t }}</span>
-                </div>
-                <p v-else class="empty-msg">Aucun detecte</p>
-              </div>
-
-              <div class="gtm-group">
-                <span class="cat-label">Pixels publicitaires</span>
-                <div v-if="result.gtm_signals?.ad_pixels?.length" class="pills-row">
-                  <span v-for="t in result.gtm_signals.ad_pixels" :key="t" class="pill pill-pixel">{{ t }}</span>
-                </div>
-                <p v-else class="empty-msg">Aucun detecte</p>
-              </div>
-
-              <div class="gtm-group">
-                <span class="cat-label">Analytics</span>
-                <div v-if="result.gtm_signals?.analytics_tools?.length" class="pills-row">
-                  <span v-for="t in result.gtm_signals.analytics_tools" :key="t" class="pill pill-analytics">{{ t }}</span>
-                </div>
-                <p v-else class="empty-msg">Aucun detecte</p>
-              </div>
-            </div>
-
-            <div class="gtm-booleans">
-              <span class="bool-indicator" :class="result.gtm_signals?.has_pricing_page ? 'bool-true' : 'bool-false'">
-                {{ result.gtm_signals?.has_pricing_page ? '✓' : '✗' }} Page Pricing
-              </span>
-              <span class="bool-indicator" :class="result.gtm_signals?.has_demo_form ? 'bool-true' : 'bool-false'">
-                {{ result.gtm_signals?.has_demo_form ? '✓' : '✗' }} Formulaire Demo
-              </span>
-              <span class="bool-indicator" :class="result.gtm_signals?.has_careers_page ? 'bool-true' : 'bool-false'">
-                {{ result.gtm_signals?.has_careers_page ? '✓' : '✗' }} Page Careers
-              </span>
-            </div>
-          </section>
-
-        </div>
-
-        <!-- Section D : Score B2B SaaS -->
-        <section class="card section-score">
-          <h2 class="section-title">Score Fit B2B SaaS</h2>
-
-          <div class="score-header">
-            <div class="score-number-block">
-              <span class="score-number" :class="scoreColorClass(result.score?.score)">
-                {{ result.score?.score ?? 0 }}
-              </span>
-              <span class="score-denom">/100</span>
-            </div>
-            <span class="score-label" :class="scoreColorClass(result.score?.score)">
-              {{ result.score?.label }}
-            </span>
-          </div>
-
-          <div class="progress-bar-outer">
-            <div
-              class="progress-bar-inner"
-              :class="scoreColorClass(result.score?.score)"
-              :style="{ width: (result.score?.score ?? 0) + '%' }"
-            ></div>
-          </div>
-
-          <div v-if="result.score?.factors?.length" class="score-factors">
-            <div v-for="factor in result.score.factors" :key="factor.name" class="factor-row">
-              <span class="factor-name">{{ factor.name }}</span>
-              <div class="factor-bar-outer">
-                <div
-                  class="factor-bar-inner"
-                  :style="{ width: factor.max > 0 ? (factor.points / factor.max * 100) + '%' : '0%' }"
-                ></div>
-              </div>
-              <span class="factor-pts">{{ factor.points }} / {{ factor.max }} pts</span>
-            </div>
-          </div>
-        </section>
-
-      </div>
+      <!-- Erreur -->
+      <ErrorState
+        v-else-if="phase === 'error'"
+        :error-info="errorInfo"
+        @retry="startNewSearch"
+      />
     </main>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
+import AppHeader   from './components/AppHeader.vue'
+import SearchForm  from './components/SearchForm.vue'
+import HistoryPanel from './components/HistoryPanel.vue'
+import LoadingState from './components/LoadingState.vue'
+import ErrorState  from './components/ErrorState.vue'
+import ResultView  from './components/result/ResultView.vue'
 
-// URL de l'API lue depuis la variable d'environnement Vite.
-// Copier frontend/.env.example en frontend/.env.local et renseigner VITE_API_URL.
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
-const url = ref('')
-const loading = ref(false)
-const result = ref(null)
-const error = ref(null)
-const latency = ref(null)
-const copySuccess = ref(false)
+// ---------------------------------------------------------------------------
+// État global
+// ---------------------------------------------------------------------------
+const phase      = ref('idle')   // 'idle' | 'loading' | 'result' | 'error'
+const url        = ref('')
+const inputError = ref(null)
+const result     = ref(null)
+const latency    = ref(null)
+const errorInfo  = ref(null)     // { status: number, detail: string }
 
 // ---------------------------------------------------------------------------
 // Historique localStorage
 // ---------------------------------------------------------------------------
-
 const HISTORY_KEY = 'konsole_history'
 const HISTORY_MAX = 10
 const history = ref([])
 
 function loadHistory() {
-  try {
-    history.value = JSON.parse(localStorage.getItem(HISTORY_KEY) ?? '[]')
-  } catch {
-    history.value = []
-  }
+  try { history.value = JSON.parse(localStorage.getItem(HISTORY_KEY) ?? '[]') }
+  catch { history.value = [] }
 }
 
-function saveToHistory(analysisResult) {
+function saveToHistory(data) {
   const entry = {
-    url: analysisResult.url,
-    name: analysisResult.profile?.name ?? analysisResult.page_title ?? analysisResult.url,
-    score: analysisResult.score?.score ?? 0,
-    favicon: analysisResult.favicon_url ?? null,
-    result: analysisResult,
+    url:    data.url,
+    name:   data.profile?.name ?? data.page_title ?? data.url,
+    score:  data.score?.score ?? 0,
+    favicon: data.favicon_url ?? null,
+    result: data,
   }
   const deduped = history.value.filter(h => h.url !== entry.url)
   history.value = [entry, ...deduped].slice(0, HISTORY_MAX)
-  try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(history.value))
-  } catch {
-    // localStorage plein ou indisponible — non bloquant
-  }
+  try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history.value)) }
+  catch { /* localStorage plein */ }
 }
 
 function loadFromHistory(entry) {
-  result.value = entry.result
-  url.value = entry.url
-  latency.value = null
-  error.value = null
+  result.value   = entry.result
+  url.value      = entry.url
+  latency.value  = null
+  errorInfo.value = null
+  phase.value    = 'result'
 }
 
-// ---------------------------------------------------------------------------
-// Copier le JSON
-// ---------------------------------------------------------------------------
-
-async function copyJson() {
-  if (!result.value) return
-  try {
-    await navigator.clipboard.writeText(JSON.stringify(result.value, null, 2))
-    copySuccess.value = true
-    setTimeout(() => { copySuccess.value = false }, 2000)
-  } catch {
-    // navigator.clipboard indisponible (HTTP sans TLS ou permissions refusees)
-  }
+function startNewSearch() {
+  phase.value     = 'idle'
+  url.value       = ''
+  inputError.value = null
+  result.value    = null
+  latency.value   = null
+  errorInfo.value = null
 }
 
 // ---------------------------------------------------------------------------
 // Analyse principale
 // ---------------------------------------------------------------------------
-
 async function handleAnalyze() {
-  if (!url.value.trim()) return
-
-  loading.value = true
+  const trimmed = url.value.trim()
+  if (!trimmed) {
+    inputError.value = 'Merci de saisir une URL à analyser.'
+    return
+  }
+  inputError.value = null
+  phase.value  = 'loading'
   result.value = null
-  error.value = null
   latency.value = null
 
-  const startTime = Date.now()
-
-  // Timeout de 60 secondes pour absorber le cold start Render (free tier)
+  const startTime  = Date.now()
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 60_000)
+  const timeoutId  = setTimeout(() => controller.abort(), 60_000)
 
   try {
     const response = await fetch(`${API_URL}/analyze`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: url.value.trim() }),
+      body: JSON.stringify({ url: trimmed }),
       signal: controller.signal,
     })
 
     if (!response.ok) {
       const body = await response.json().catch(() => ({}))
-      throw new Error(body.detail ?? `Erreur HTTP ${response.status}`)
+      errorInfo.value = { status: response.status, detail: body.detail ?? `Erreur HTTP ${response.status}` }
+      phase.value = 'error'
+      return
     }
 
-    result.value = await response.json()
+    result.value  = await response.json()
     latency.value = ((Date.now() - startTime) / 1000).toFixed(1)
     saveToHistory(result.value)
+    phase.value = 'result'
   } catch (err) {
-    if (err.name === 'AbortError') {
-      error.value = 'La requete a depasse 60 secondes. Le backend (Render free tier) est peut-etre en cours de demarrage - reessayez dans un instant.'
-    } else {
-      error.value = err.message ?? 'Erreur inconnue.'
-    }
+    errorInfo.value = err.name === 'AbortError'
+      ? { status: 408, detail: 'La requête a dépassé 60 secondes. Le backend est peut-être en cours de démarrage — réessayez.' }
+      : { status: 0,   detail: err.message ?? 'Erreur inconnue.' }
+    phase.value = 'error'
   } finally {
     clearTimeout(timeoutId)
-    loading.value = false
   }
 }
 
 onMounted(loadHistory)
-
-// Cache les favicons en erreur de chargement
-function hideFavicon(event) {
-  event.target.style.display = 'none'
-}
-
-// Mapping cles tech_stack -> labels lisibles
-const TECH_CAT_LABELS = {
-  frameworks: 'Frameworks',
-  cdn: 'CDN',
-  cms: 'CMS',
-  server: 'Serveur',
-  analytics: 'Analytics',
-  tag_managers: 'Tag Managers',
-  other: 'Autres',
-}
-
-// Retourne uniquement les categories de tech non vides
-const techCategories = computed(() => {
-  const stack = result.value?.tech_stack ?? {}
-  return Object.entries(TECH_CAT_LABELS)
-    .map(([key, label]) => ({ key, label, items: stack[key] ?? [] }))
-    .filter((cat) => cat.items.length > 0)
-})
-
-const hasTechStack = computed(() => techCategories.value.length > 0)
-
-// Classe CSS du badge audience selon la valeur B2B/B2C/mixed
-function audienceBadgeClass(audience) {
-  if (!audience) return 'badge-neutral'
-  const a = audience.toLowerCase()
-  if (a === 'b2b') return 'badge-b2b'
-  if (a === 'b2c') return 'badge-b2c'
-  return 'badge-neutral'
-}
-
-// Classe CSS couleur selon le score numerique
-function scoreColorClass(score) {
-  if (score == null) return 'score-gray'
-  if (score >= 80) return 'score-green'
-  if (score >= 60) return 'score-blue'
-  if (score >= 40) return 'score-orange'
-  return 'score-red'
-}
 </script>
 
 <style scoped>
-/* -----------------------------------------------
-   Layout principal
------------------------------------------------ */
-.app {
-  max-width: 820px;
+.app-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-content {
+  max-width: 760px;
   margin: 0 auto;
-  padding: 2.5rem 1.25rem 4rem;
-  text-align: left;
+  padding: 0 24px 80px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
-/* -----------------------------------------------
-   Header
------------------------------------------------ */
-.app-header {
-  margin-bottom: 2rem;
+.idle-screen {
+  padding-top: 13vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   text-align: center;
+  gap: 28px;
 }
 
-.app-title {
-  font-size: 1.75rem;
-  font-weight: 700;
-  color: var(--text-h);
-  margin: 0 0 0.4rem;
-  letter-spacing: -0.02em;
-}
-
-.title-dot {
-  color: var(--accent);
-}
-
-.subtitle {
+.hero-title {
+  font: 600 42px/1.2 var(--font-heading);
   color: var(--text);
-  font-size: 0.95rem;
-  margin: 0;
+  max-width: 580px;
+  letter-spacing: -0.01em;
 }
 
-/* -----------------------------------------------
-   Formulaire
------------------------------------------------ */
-.search-form {
-  display: flex;
-  gap: 0.6rem;
-  margin-bottom: 1.5rem;
+.hero-sub {
+  font: 500 16px/1.6 var(--font-body);
+  color: var(--text-secondary);
+  max-width: 460px;
 }
 
-.url-input {
-  flex: 1;
-  padding: 0.6rem 0.9rem;
-  font-size: 1rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  outline: none;
-  background: var(--bg);
-  color: var(--text-h);
-  font-family: inherit;
-  transition: border-color 0.15s;
-}
-
-.url-input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(170, 59, 255, 0.15);
-}
-
-.analyze-btn {
-  padding: 0.6rem 1.4rem;
-  background: var(--accent);
-  color: #fff;
-  border: none;
-  border-radius: 6px;
-  font-size: 1rem;
-  font-family: inherit;
-  cursor: pointer;
-  transition: opacity 0.15s;
-  white-space: nowrap;
-}
-
-.analyze-btn:hover:not(:disabled) {
-  opacity: 0.88;
-}
-
-.analyze-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-/* -----------------------------------------------
-   Historique localStorage
------------------------------------------------ */
-.history-panel {
-  margin-bottom: 1.25rem;
-}
-
-.history-title {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--text);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  margin: 0 0 0.5rem;
-}
-
-.history-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-}
-
-.history-item {
-  display: flex;
-  align-items: center;
-  gap: 0.55rem;
-  width: 100%;
-  padding: 0.45rem 0.75rem;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  cursor: pointer;
-  text-align: left;
-  font-family: inherit;
-  font-size: 0.85rem;
-  color: var(--text-h);
-  transition: border-color 0.15s, background 0.15s;
-}
-
-.history-item:hover {
-  border-color: var(--accent);
-  background: var(--accent-bg);
-}
-
-.history-favicon {
-  width: 16px;
-  height: 16px;
-  border-radius: 3px;
-  object-fit: contain;
-  flex-shrink: 0;
-}
-
-.history-name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.history-score {
-  font-size: 0.78rem;
-  font-weight: 600;
-  flex-shrink: 0;
-}
-
-/* -----------------------------------------------
-   Loading
------------------------------------------------ */
-.loading-block {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.9rem;
-  padding: 1rem 1.2rem;
-  background: var(--accent-bg);
-  border: 1px solid var(--accent-border);
-  border-radius: 8px;
-  color: var(--text-h);
-  margin-bottom: 1rem;
-}
-
-.loading-text {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-}
-
-.loading-main {
-  font-weight: 600;
-  color: var(--text-h);
-  margin: 0;
-}
-
-.loading-sub {
-  font-size: 0.85rem;
-  color: var(--text);
-  margin: 0;
-}
-
-.spinner {
-  width: 20px;
-  height: 20px;
-  border: 2.5px solid var(--border);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: spin 0.75s linear infinite;
-  flex-shrink: 0;
-  margin-top: 2px;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-/* -----------------------------------------------
-   Erreur
------------------------------------------------ */
-.error-block {
-  padding: 1rem 1.2rem;
-  background: #fef2f2;
-  border: 1px solid #fca5a5;
-  border-radius: 8px;
-  color: #b91c1c;
-  margin-bottom: 1rem;
-  font-size: 0.95rem;
-}
-
-/* -----------------------------------------------
-   Resultats generaux
------------------------------------------------ */
-.results {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-}
-
-.card {
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 1.25rem 1.4rem;
-  background: var(--bg);
-}
-
-.section-title {
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--text-h);
-  margin: 0 0 0.9rem;
-  letter-spacing: 0.01em;
-}
-
-.section-title-row {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  margin-bottom: 0.9rem;
-}
-
-.section-title-row .section-title {
-  margin-bottom: 0;
-}
-
-/* -----------------------------------------------
-   Section A : Identite
------------------------------------------------ */
-.identity-header {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  margin-bottom: 0.6rem;
-}
-
-.favicon {
-  width: 28px;
-  height: 28px;
-  border-radius: 4px;
-  object-fit: contain;
-  flex-shrink: 0;
-}
-
-.company-name {
-  font-size: 1.35rem;
-  font-weight: 700;
-  color: var(--text-h);
-  margin: 0;
-  letter-spacing: -0.02em;
-}
-
-.company-desc {
-  font-style: italic;
-  color: var(--text);
-  font-size: 0.92rem;
-  line-height: 1.5;
-  margin: 0 0 0.85rem;
-}
-
-.badges-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  margin-bottom: 0.75rem;
-}
-
-.latency-info {
-  font-size: 0.78rem;
-  color: var(--text);
-  margin: 0 0 0.6rem;
-}
-
-.identity-footer {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  flex-wrap: wrap;
-  margin-top: 0.1rem;
-}
-
-.result-url {
-  font-size: 0.8rem;
-  color: var(--text);
-  text-decoration: none;
-  border-bottom: 1px solid var(--border);
-  transition: color 0.15s;
-}
-
-.result-url:hover {
-  color: var(--accent);
-  border-bottom-color: var(--accent);
-}
-
-.copy-btn {
-  font-size: 0.78rem;
-  font-family: inherit;
-  font-weight: 500;
-  padding: 0.2rem 0.6rem;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: var(--bg);
-  color: var(--text);
-  cursor: pointer;
-  transition: border-color 0.15s, color 0.15s;
-  white-space: nowrap;
-}
-
-.copy-btn:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-/* -----------------------------------------------
-   Badges generaux
------------------------------------------------ */
-.badge {
-  display: inline-block;
-  padding: 0.2rem 0.55rem;
-  border-radius: 99px;
-  font-size: 0.78rem;
-  font-weight: 500;
-  line-height: 1.4;
-}
-
-.badge-neutral {
-  background: var(--code-bg);
-  color: var(--text-h);
-  border: 1px solid var(--border);
-}
-
-.badge-b2b {
-  background: #dcfce7;
-  color: #166534;
-  border: 1px solid #bbf7d0;
-}
-
-.badge-b2c {
-  background: #fff7ed;
-  color: #9a3412;
-  border: 1px solid #fed7aa;
-}
-
-.badge-insight {
-  display: inline-block;
-  padding: 0.18rem 0.5rem;
-  border-radius: 4px;
-  font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  background: var(--accent-bg);
-  color: var(--accent);
-  border: 1px solid var(--accent-border);
-  text-transform: uppercase;
-  flex-shrink: 0;
-}
-
-/* -----------------------------------------------
-   Grille deux colonnes
------------------------------------------------ */
-.two-col {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 1rem;
-}
-
-@media (min-width: 640px) {
-  .two-col {
-    grid-template-columns: 1fr 1fr;
-  }
-}
-
-/* -----------------------------------------------
-   Section B : Tech Stack
------------------------------------------------ */
-.tech-categories {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.tech-cat {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-}
-
-.cat-label {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--text);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-
-.pills-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
-}
-
-.pill {
-  display: inline-block;
-  padding: 0.2rem 0.6rem;
-  border-radius: 99px;
-  font-size: 0.8rem;
-  font-weight: 500;
-}
-
-.pill-default {
-  background: var(--code-bg);
-  color: var(--text-h);
-  border: 1px solid var(--border);
-}
-
-.empty-msg {
-  font-size: 0.85rem;
-  color: var(--text);
-  font-style: italic;
-  margin: 0.2rem 0 0;
-}
-
-/* -----------------------------------------------
-   Section C : Signaux GTM
------------------------------------------------ */
-.gtm-groups {
-  display: flex;
-  flex-direction: column;
-  gap: 0.85rem;
-  margin-bottom: 1rem;
-}
-
-.gtm-group {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-}
-
-/* Couleurs des pills GTM */
-.pill-chat {
-  background: #eff6ff;
-  color: #1d4ed8;
-  border: 1px solid #bfdbfe;
-}
-
-.pill-pixel {
-  background: #fff7ed;
-  color: #c2410c;
-  border: 1px solid #fed7aa;
-}
-
-.pill-analytics {
-  background: #faf5ff;
-  color: #7c3aed;
-  border: 1px solid #ddd6fe;
-}
-
-/* Indicateurs booleens */
-.gtm-booleans {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  padding-top: 0.75rem;
-  border-top: 1px solid var(--border);
-}
-
-.bool-indicator {
-  font-size: 0.82rem;
-  font-weight: 500;
-  padding: 0.25rem 0.65rem;
-  border-radius: 6px;
-}
-
-.bool-true {
-  background: #dcfce7;
-  color: #166534;
-}
-
-.bool-false {
-  background: #fef2f2;
-  color: #b91c1c;
-}
-
-/* -----------------------------------------------
-   Section D : Score
------------------------------------------------ */
-.score-header {
-  display: flex;
-  align-items: baseline;
-  gap: 0.75rem;
-  margin-bottom: 0.75rem;
-  flex-wrap: wrap;
-}
-
-.score-number-block {
-  display: flex;
-  align-items: baseline;
-  gap: 0.15rem;
-}
-
-.score-number {
-  font-size: 2.8rem;
-  font-weight: 800;
-  line-height: 1;
-  letter-spacing: -0.04em;
-}
-
-.score-denom {
-  font-size: 1.1rem;
-  font-weight: 500;
-  color: var(--text);
-}
-
-.score-label {
-  font-size: 0.9rem;
-  font-weight: 600;
-}
-
-/* Couleurs du score */
-.score-green { color: #16a34a; }
-.score-blue  { color: #2563eb; }
-.score-orange { color: #ea580c; }
-.score-red   { color: #dc2626; }
-.score-gray  { color: var(--text); }
-
-/* Barre de progression principale */
-.progress-bar-outer {
-  width: 100%;
-  height: 8px;
-  background: var(--code-bg);
-  border-radius: 99px;
-  overflow: hidden;
-  margin-bottom: 1.25rem;
-}
-
-.progress-bar-inner {
-  height: 100%;
-  border-radius: 99px;
-  transition: width 0.4s ease;
-}
-
-.progress-bar-inner.score-green  { background: #16a34a; }
-.progress-bar-inner.score-blue   { background: #2563eb; }
-.progress-bar-inner.score-orange { background: #ea580c; }
-.progress-bar-inner.score-red    { background: #dc2626; }
-.progress-bar-inner.score-gray   { background: var(--text); }
-
-/* Breakdown des facteurs */
-.score-factors {
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
-}
-
-.factor-row {
-  display: grid;
-  grid-template-columns: 1fr auto auto;
-  align-items: center;
-  gap: 0.75rem;
-}
-
-.factor-name {
-  font-size: 0.85rem;
-  color: var(--text-h);
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.factor-bar-outer {
-  width: 80px;
-  height: 5px;
-  background: var(--border);
-  border-radius: 99px;
-  overflow: hidden;
-  flex-shrink: 0;
-}
-
-.factor-bar-inner {
-  height: 100%;
-  background: var(--accent);
-  border-radius: 99px;
-  transition: width 0.3s ease;
-}
-
-.factor-pts {
-  font-size: 0.78rem;
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-/* -----------------------------------------------
-   Responsive mobile
------------------------------------------------ */
 @media (max-width: 480px) {
-  .app {
-    padding: 1.5rem 1rem 3rem;
-  }
-
-  .app-title {
-    font-size: 1.4rem;
-  }
-
-  .search-form {
-    flex-direction: column;
-  }
-
-  .analyze-btn {
-    width: 100%;
-  }
-
-  .factor-row {
-    grid-template-columns: 1fr auto;
-  }
-
-  .factor-bar-outer {
-    display: none;
-  }
+  .hero-title { font-size: 28px; }
+  .hero-sub   { font-size: 15px; }
+  .app-content { padding: 0 16px 60px; }
 }
 </style>
