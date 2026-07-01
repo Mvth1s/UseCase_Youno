@@ -38,3 +38,9 @@ jobs:
         env:
           MISTRAL_API_KEY: dummy-key-for-ci
         run: python -c "from app.main import app; from app.scorer import compute_score; from app.tech_detector import detect_tech_stack; from app.gtm_detector import detect_gtm_signals; print('All imports OK')"
+
+      - name: Run unit tests
+        working-directory: backend
+        env:
+          MISTRAL_API_KEY: dummy-key-for-ci
+        run: pytest tests/ -v
