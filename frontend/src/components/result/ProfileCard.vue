@@ -2,7 +2,14 @@
   <div class="card">
     <div class="profile-layout">
       <div class="avatar" aria-hidden="true">
-        <span class="avatar-initial">{{ initial }}</span>
+        <img
+          v-if="result.favicon_url && !faviconError"
+          :src="result.favicon_url"
+          class="avatar-favicon"
+          alt=""
+          @error="faviconError = true"
+        />
+        <span v-else class="avatar-initial">{{ initial }}</span>
       </div>
       <div class="profile-content">
         <div class="profile-headline">
@@ -62,6 +69,7 @@ const props = defineProps({
 })
 
 const copySuccess = ref(false)
+const faviconError = ref(false)
 
 const initial = computed(() => {
   const name = props.result.profile?.name ?? props.result.page_title ?? ''
@@ -114,6 +122,13 @@ async function copyJson() {
 .avatar-initial {
   font: 700 20px var(--font-heading);
   color: #fff;
+}
+
+.avatar-favicon {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+  border-radius: 4px;
 }
 
 .profile-content {
