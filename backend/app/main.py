@@ -54,7 +54,6 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -160,9 +159,11 @@ def analyze(request: Request, body: AnalyzeRequest) -> CompanyAnalysis:
             status_code=503,
             detail=f"Trop de redirections pour atteindre : {body.url}",
         ) from exc
-    except Exception as exc:
-        logger.exception("Erreur inattendue lors du scraping de %s", body.url)
-        raise HTTPException(status_code=500, detail="Erreur interne lors de la collecte.") from exc
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Erreur reseau lors du scraping : {body.url}",
+        ) from exc
 
     # --- Etapes 2 & 3 : detection (non-LLM, ne levent pas d'exception) ---
     tech_stack = detect_tech_stack(scraped)

@@ -16,6 +16,8 @@ Cet outil repond automatiquement a ces questions a partir de l'URL du site :
 - **Signaux GTM** : la presence d'un LinkedIn Insight Tag indique que l'entreprise achete de la publicite B2B. Un Intercom ou un Drift indique un investissement dans l'engagement client. Une page `/pricing` publique indique un SaaS avec un cycle de vente accessible et une tarification formalisee.
 - **Score B2B SaaS (0-100)** : synthese ponderee de ces signaux en un seul chiffre actionnable, accompagne d'un label qualitatif ("Cible ideale B2B SaaS", "Fort potentiel B2B", etc.) et du detail de chaque facteur. Un commercial peut lire le score en trois secondes et comprendre pourquoi en dix.
 
+Cote interface, les 10 dernieres analyses sont conservees en localStorage et restituees instantanement depuis le panneau historique, sans re-appel au backend. La latence de chaque analyse est affichee, et le JSON complet est exportable en un clic pour alimenter un autre outil ou un webhook Konsole.
+
 ---
 
 ## Architecture
@@ -55,11 +57,11 @@ Chaque etape produit un objet structure consomme par l'etape suivante. Seul `mai
 
 | Fichier | Responsabilite |
 |---|---|
-| `app/main.py` | Route `POST /analyze`, configuration CORS, orchestration de la pipeline |
+| `app/main.py` | Route `POST /analyze`, CORS, orchestration pipeline, cache memoire TTL 1h (max 200 entrees, eviction LRU), rate limiting 10 req/min par IP via slowapi |
 | `app/scraper.py` | Normalisation URL, fetch httpx avec gestion manuelle des redirections, extraction BeautifulSoup, protection SSRF |
 | `app/tech_detector.py` | Detection tech stack par signatures HTML et headers HTTP |
 | `app/gtm_detector.py` | Detection signaux GTM (outils de chat, pixels publicitaires, analytics, pages cles) |
-| `app/profiler.py` | Appel API Mistral, sortie JSON forcee, parsing defensif en trois passes, fallback sur metadonnees |
+| `app/profiler.py` | Appel API Mistral, sortie JSON forcee, parsing defensif en trois passes, normalisation `estimated_size`, fallback sur metadonnees |
 | `app/scorer.py` | Calcul du score "fit B2B SaaS" par regles ponderees, breakdown des 8 facteurs |
 | `app/models.py` | Modeles Pydantic pour la validation des entrees et la serialisation des sorties |
 
@@ -76,6 +78,10 @@ Chaque etape produit un objet structure consomme par l'etape suivante. Seul `mai
 **httpx + BeautifulSoup** -- httpx permet le controle fin des redirections, necessaire pour la protection anti-SSRF (chaque saut de redirection est revalide). Le streaming du body limite la consommation memoire sur les pages volumineuses. BeautifulSoup avec le parseur `html.parser` est robuste sans dependance systeme. Playwright ou Selenium n'ont pas ete retenus : le rendu JavaScript ajoute plusieurs secondes de latence et complexifie considerablement le deploiement, pour un gain marginal sur la majorite des sites.
 
 **Detection par signatures (non-LLM)** -- Toute la detection tech stack et GTM repose sur des correspondances de patterns dans le HTML brut et les headers HTTP. Ce choix garantit la transparence (chaque resultat est la preuve directe d'une signature presente dans la source), la vitesse (pas d'appel reseau supplementaire), et l'extensibilite (ajouter un outil = ajouter une ligne dans la liste correspondante, sans modifier la logique de detection).
+
+**Cache memoire TTL 1h** -- Un dictionnaire en memoire dans le worker Uvicorn evite de re-scraper et de re-appeler Mistral pour la meme URL dans la meme heure. C'est volontairement simple : pas de Redis (surcouche injustifiee pour un MVP), pas de persistance entre redemarrages du worker (documentee comme limite connue). L'eviction LRU sur un plafond de 200 entrees previent les fuites memoire sur le free tier.
+
+**Rate limiting (slowapi, 10 req/min par IP)** -- Un seul appel LLM coute entre 0,001 et 0,01 dollar. Sans protection, un bot peut vider le credit Mistral en quelques minutes. slowapi s'integre en deux lignes au-dessus de la route sans modifier la logique metier ; la reponse 429 est standard et geree explicitement par le frontend.
 
 **Netlify + Render** -- Netlify pour le frontend : deploiement automatique depuis Git, CDN mondial, TLS et redirections SPA configures par `netlify.toml`. Render pour le backend : deploiement depuis `render.yaml` (Blueprint), restart automatique, plan gratuit suffisant pour un MVP.
 
@@ -105,9 +111,18 @@ Verification :
 curl http://localhost:8000/health
 # {"status":"ok"}
 
+# HEAD est egalement supporte (utilise par UptimeRobot)
+curl -I http://localhost:8000/health
+
 curl -X POST http://localhost:8000/analyze \
   -H "Content-Type: application/json" \
   -d '{"url": "stripe.com"}'
+```
+
+Tests unitaires (105 tests sur les trois modules deterministes) :
+
+```bash
+pytest tests/ -v
 ```
 
 ### Frontend
@@ -130,6 +145,16 @@ npm run dev                    # http://localhost:5173
 | `VITE_API_URL` | `frontend/.env.local` | URL du backend appelee par Vue |
 
 Les fichiers `.env.example` dans chaque dossier contiennent les valeurs par defaut pour le developpement local.
+
+---
+
+## Integration continue
+
+Deux workflows GitHub Actions declenchent automatiquement sur `push` et `pull_request` vers `main` et `dev`.
+
+**Backend** (`.github/workflows/backend.yml`) : verification syntaxique (`py_compile`), validation des imports avec une cle factice, puis execution des 105 tests unitaires via `pytest tests/ -v`. Le workflow ne passe que sur les chemins `backend/**`.
+
+**Frontend** (`.github/workflows/frontend.yml`) : `npm ci` + `npm run build` avec l'URL backend de production injectee en variable d'environnement. Verifie que `dist/index.html` est present a l'issue du build. Le workflow ne passe que sur les chemins `frontend/**`.
 
 ---
 
@@ -193,14 +218,18 @@ UseCase_Youno/
 |
 +-- backend/                  FastAPI (Python 3.11)
 |   +-- app/
-|   |   +-- main.py           Route POST /analyze, CORS, orchestration pipeline
+|   |   +-- main.py           Route POST /analyze, CORS, orchestration pipeline, cache TTL, rate limiting
 |   |   +-- scraper.py        Fetch httpx + extraction BeautifulSoup + protection SSRF
 |   |   +-- tech_detector.py  Detection stack par signatures HTML et headers
 |   |   +-- gtm_detector.py   Detection signaux GTM (chat, pixels, analytics, pages cles)
-|   |   +-- profiler.py       Appel Mistral, JSON force, parsing defensif, fallback
+|   |   +-- profiler.py       Appel Mistral, JSON force, parsing defensif, normalisation taille, fallback
 |   |   +-- scorer.py         Score pondere "fit B2B SaaS", breakdown explicable
 |   |   +-- models.py         Modeles Pydantic entree/sortie
-|   +-- requirements.txt      Dependances Python (FastAPI, httpx, BeautifulSoup, Pydantic)
+|   +-- tests/
+|   |   +-- test_scorer.py         Tests unitaires scorer
+|   |   +-- test_tech_detector.py  Tests unitaires tech_detector
+|   |   +-- test_gtm_detector.py   Tests unitaires gtm_detector
+|   +-- requirements.txt      Dependances Python (FastAPI, httpx, BeautifulSoup, slowapi, pytest)
 |   +-- render.yaml           Configuration Blueprint Render
 |   +-- warmup.py             Script de warm-up anti-cold-start
 |   +-- API_CONTRACT.md       Contrat JSON complet entre frontend et backend
@@ -208,8 +237,20 @@ UseCase_Youno/
 |
 +-- frontend/                 Vue 3 + Vite
 |   +-- src/
-|   |   +-- App.vue           Interface principale (formulaire + 4 sections de resultats)
-|   |   +-- main.js           Point d'entree Vue
+|   |   +-- App.vue                     Orchestrateur (phases : idle / loading / result / error)
+|   |   +-- main.js                     Point d'entree Vue
+|   |   +-- components/
+|   |   |   +-- AppHeader.vue
+|   |   |   +-- SearchForm.vue
+|   |   |   +-- HistoryPanel.vue        10 dernieres analyses, persistance localStorage
+|   |   |   +-- LoadingState.vue
+|   |   |   +-- ErrorState.vue
+|   |   |   +-- result/
+|   |   |   |   +-- ResultView.vue      Conteneur + copie JSON + affichage latence
+|   |   |   |   +-- ProfileCard.vue     Profil entreprise + favicon
+|   |   |   |   +-- ScoreCard.vue       Score avec donut SVG
+|   |   |   |   +-- GtmCard.vue         Signaux GTM
+|   |   |   |   +-- TechStackCard.vue   Tech stack (section repliable)
 |   +-- netlify.toml          Configuration de deploiement Netlify
 |   +-- .env.example          Template des variables d'environnement
 |

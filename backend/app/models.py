@@ -6,7 +6,7 @@ Tout changement de schema doit etre repercute dans API_CONTRACT.md.
 from __future__ import annotations
 
 from typing import Optional
-from pydantic import BaseModel, HttpUrl, field_validator
+from pydantic import BaseModel, field_validator
 
 
 # ---------------------------------------------------------------------------

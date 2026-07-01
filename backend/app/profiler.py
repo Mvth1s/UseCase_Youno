@@ -18,9 +18,6 @@ import re
 from urllib.parse import urlparse
 
 import httpx
-from dotenv import load_dotenv
-
-load_dotenv()
 
 from app.models import CompanyProfile
 from app.scraper import ScrapedData
@@ -183,8 +180,7 @@ def _extract_domain_name(url: str) -> str:
         hostname = re.sub(r"^www\.", "", hostname)
         domain_root: str = hostname.split(".")[0]
         return domain_root.capitalize() if domain_root else ""
-    except Exception:
-        # Ne jamais propager d'exception dans une fonction utilitaire de fallback
+    except (ValueError, AttributeError):
         return ""
 
 
