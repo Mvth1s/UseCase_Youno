@@ -61,6 +61,7 @@ app.add_middleware(
 
 
 @app.get("/health")
+@app.head("/health")
 def health_check() -> dict[str, str]:
     """Endpoint de sante utilise par Render pour les healthchecks."""
     return {"status": "ok"}
