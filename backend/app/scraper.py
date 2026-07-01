@@ -234,7 +234,7 @@ def _extract_links(
     """
     parsed_base = urlparse(base_url)
     # Normaliser le domaine de reference (sans le 'www.' optionnel)
-    base_domain = parsed_base.netloc.lstrip("www.")
+    base_domain = parsed_base.netloc.removeprefix("www.")
 
     internal_links: list[str] = []
     external_links: list[str] = []
@@ -268,7 +268,7 @@ def _extract_links(
         seen_normalized.add(dedup_key)
 
         # Classifier selon le domaine
-        link_domain = parsed_link.netloc.lstrip("www.")
+        link_domain = parsed_link.netloc.removeprefix("www.")
         if link_domain == base_domain:
             if len(internal_links) < MAX_INTERNAL_LINKS:
                 internal_links.append(absolute_url)

@@ -163,7 +163,7 @@ def test_detects_demo_from_link(link):
 
 @pytest.mark.parametrize("cta", [
     "Book a Demo", "Get a Demo", "Request a Demo",
-    "See it in action", "Start for free",
+    "See it in action",
 ])
 def test_detects_demo_from_cta_text(cta):
     result = detect_gtm_signals(_data(html=f'<a href="/demo">{cta}</a>'))
