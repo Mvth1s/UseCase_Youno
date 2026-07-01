@@ -22,6 +22,29 @@
         </button>
       </form>
 
+      <!-- Analyses recentes (localStorage) -->
+      <div v-if="history.length && !loading" class="history-panel">
+        <p class="history-title">Analyses recentes</p>
+        <div class="history-list">
+          <button
+            v-for="entry in history"
+            :key="entry.url"
+            class="history-item"
+            @click="loadFromHistory(entry)"
+          >
+            <img
+              v-if="entry.favicon"
+              :src="entry.favicon"
+              class="history-favicon"
+              alt=""
+              @error="e => e.target.style.display = 'none'"
+            />
+            <span class="history-name">{{ entry.name }}</span>
+            <span class="history-score" :class="scoreColorClass(entry.score)">{{ entry.score }}/100</span>
+          </button>
+        </div>
+      </div>
+
       <!-- Etat loading -->
       <div v-if="loading" class="loading-block" role="status" aria-live="polite">
         <div class="spinner" aria-hidden="true"></div>
@@ -51,6 +74,7 @@
             />
             <h2 class="company-name">{{ result.profile?.name ?? result.page_title }}</h2>
           </div>
+          <p v-if="latency" class="latency-info">Analyse en {{ latency }}s</p>
           <p v-if="result.profile?.description" class="company-desc">{{ result.profile.description }}</p>
           <div class="badges-row">
             <span v-if="result.profile?.sector" class="badge badge-neutral">{{ result.profile.sector }}</span>
@@ -61,13 +85,18 @@
               :class="audienceBadgeClass(result.profile.audience)"
             >{{ result.profile.audience }}</span>
           </div>
-          <a
-            v-if="result.url"
-            :href="result.url"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="result-url"
-          >{{ result.url }}</a>
+          <div class="identity-footer">
+            <a
+              v-if="result.url"
+              :href="result.url"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="result-url"
+            >{{ result.url }}</a>
+            <button class="copy-btn" @click="copyJson">
+              {{ copySuccess ? 'Copie !' : 'Copier JSON' }}
+            </button>
+          </div>
         </section>
 
         <!-- Grille deux colonnes (tech + GTM) sur desktop -->
@@ -179,7 +208,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 
 // URL de l'API lue depuis la variable d'environnement Vite.
 // Copier frontend/.env.example en frontend/.env.local et renseigner VITE_API_URL.
@@ -189,6 +218,67 @@ const url = ref('')
 const loading = ref(false)
 const result = ref(null)
 const error = ref(null)
+const latency = ref(null)
+const copySuccess = ref(false)
+
+// ---------------------------------------------------------------------------
+// Historique localStorage
+// ---------------------------------------------------------------------------
+
+const HISTORY_KEY = 'konsole_history'
+const HISTORY_MAX = 10
+const history = ref([])
+
+function loadHistory() {
+  try {
+    history.value = JSON.parse(localStorage.getItem(HISTORY_KEY) ?? '[]')
+  } catch {
+    history.value = []
+  }
+}
+
+function saveToHistory(analysisResult) {
+  const entry = {
+    url: analysisResult.url,
+    name: analysisResult.profile?.name ?? analysisResult.page_title ?? analysisResult.url,
+    score: analysisResult.score?.score ?? 0,
+    favicon: analysisResult.favicon_url ?? null,
+    result: analysisResult,
+  }
+  const deduped = history.value.filter(h => h.url !== entry.url)
+  history.value = [entry, ...deduped].slice(0, HISTORY_MAX)
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(history.value))
+  } catch {
+    // localStorage plein ou indisponible — non bloquant
+  }
+}
+
+function loadFromHistory(entry) {
+  result.value = entry.result
+  url.value = entry.url
+  latency.value = null
+  error.value = null
+}
+
+// ---------------------------------------------------------------------------
+// Copier le JSON
+// ---------------------------------------------------------------------------
+
+async function copyJson() {
+  if (!result.value) return
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(result.value, null, 2))
+    copySuccess.value = true
+    setTimeout(() => { copySuccess.value = false }, 2000)
+  } catch {
+    // navigator.clipboard indisponible (HTTP sans TLS ou permissions refusees)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Analyse principale
+// ---------------------------------------------------------------------------
 
 async function handleAnalyze() {
   if (!url.value.trim()) return
@@ -196,6 +286,9 @@ async function handleAnalyze() {
   loading.value = true
   result.value = null
   error.value = null
+  latency.value = null
+
+  const startTime = Date.now()
 
   // Timeout de 60 secondes pour absorber le cold start Render (free tier)
   const controller = new AbortController()
@@ -215,6 +308,8 @@ async function handleAnalyze() {
     }
 
     result.value = await response.json()
+    latency.value = ((Date.now() - startTime) / 1000).toFixed(1)
+    saveToHistory(result.value)
   } catch (err) {
     if (err.name === 'AbortError') {
       error.value = 'La requete a depasse 60 secondes. Le backend (Render free tier) est peut-etre en cours de demarrage - reessayez dans un instant.'
@@ -226,6 +321,8 @@ async function handleAnalyze() {
     loading.value = false
   }
 }
+
+onMounted(loadHistory)
 
 // Cache les favicons en erreur de chargement
 function hideFavicon(event) {
@@ -356,6 +453,71 @@ function scoreColorClass(score) {
 .analyze-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* -----------------------------------------------
+   Historique localStorage
+----------------------------------------------- */
+.history-panel {
+  margin-bottom: 1.25rem;
+}
+
+.history-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: 0 0 0.5rem;
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.history-item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0.45rem 0.75rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  font-size: 0.85rem;
+  color: var(--text-h);
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.history-item:hover {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+
+.history-favicon {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.history-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-score {
+  font-size: 0.78rem;
+  font-weight: 600;
+  flex-shrink: 0;
 }
 
 /* -----------------------------------------------
@@ -495,6 +657,20 @@ function scoreColorClass(score) {
   margin-bottom: 0.75rem;
 }
 
+.latency-info {
+  font-size: 0.78rem;
+  color: var(--text);
+  margin: 0 0 0.6rem;
+}
+
+.identity-footer {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-top: 0.1rem;
+}
+
 .result-url {
   font-size: 0.8rem;
   color: var(--text);
@@ -506,6 +682,25 @@ function scoreColorClass(score) {
 .result-url:hover {
   color: var(--accent);
   border-bottom-color: var(--accent);
+}
+
+.copy-btn {
+  font-size: 0.78rem;
+  font-family: inherit;
+  font-weight: 500;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.copy-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 /* -----------------------------------------------
