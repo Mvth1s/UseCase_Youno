@@ -11,11 +11,15 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from app.gtm_detector import detect_gtm_signals
 from app.models import AnalyzeRequest, CompanyAnalysis
@@ -50,10 +54,39 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ---------------------------------------------------------------------------
+# Rate limiting : 10 requetes / minute par IP sur /analyze
+# Protege contre les abus et maitrise les couts Mistral API.
+# ---------------------------------------------------------------------------
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# ---------------------------------------------------------------------------
+# Cache memoire TTL 1h
+# Adapte au free tier Render (meme process, pas de Redis).
+# Limite connue : cache perdu au redemarrage du worker.
+# ---------------------------------------------------------------------------
+
+# Duree de validite d'une entree (en secondes)
+CACHE_TTL_SECONDS: int = 3600
+
+# Plafond d'entrees pour eviter une fuite memoire sur le free tier
+CACHE_MAX_ENTRIES: int = 200
+
+# Structure : url_normalisee -> (monotonic_timestamp, CompanyAnalysis)
+_analysis_cache: dict[str, tuple[float, "CompanyAnalysis"]] = {}
+
+
+def _cache_key(url: str) -> str:
+    """Normalise l'URL en cle de cache stable (casse et slash finaux ignores)."""
+    return url.strip().lower().rstrip("/")
+
 
 # ---------------------------------------------------------------------------
 # Routes
@@ -61,13 +94,15 @@ app.add_middleware(
 
 
 @app.get("/health")
+@app.head("/health")
 def health_check() -> dict[str, str]:
     """Endpoint de sante utilise par Render pour les healthchecks."""
     return {"status": "ok"}
 
 
 @app.post("/analyze", response_model=CompanyAnalysis)
-def analyze(request: AnalyzeRequest) -> CompanyAnalysis:
+@limiter.limit("10/minute")
+def analyze(request: Request, body: AnalyzeRequest) -> CompanyAnalysis:
     """
     Pipeline principale d'analyse d'un site web.
 
@@ -75,31 +110,44 @@ def analyze(request: AnalyzeRequest) -> CompanyAnalysis:
     Chaque exception metier est traduite en code HTTP approprie.
 
     Args:
-        request: corps JSON contenant le champ "url".
+        request: objet Request FastAPI (requis par slowapi pour l'identification IP).
+        body: corps JSON contenant le champ "url".
 
     Returns:
         CompanyAnalysis: objet complet avec profil, tech stack, signaux GTM et score.
 
     Raises:
         HTTPException 400: URL invalide ou contenu non-HTML.
+        HTTPException 429: limite de 10 requetes/minute par IP depassee.
         HTTPException 503: site injoignable (DNS, timeout, statut non-2xx).
         HTTPException 500: erreur interne inattendue.
     """
+    # --- Cache : court-circuit si resultat frais disponible (< 1h) ---
+    cache_key = _cache_key(body.url)
+    cached = _analysis_cache.get(cache_key)
+    if cached is not None:
+        ts, cached_result = cached
+        if time.monotonic() - ts < CACHE_TTL_SECONDS:
+            logger.info("[cache] Hit pour %s", cache_key)
+            return cached_result
+        # Entree expiree : nettoyage immediat
+        del _analysis_cache[cache_key]
+
     # --- Etape 1 : collecte ---
     try:
-        scraped = scrape(request.url)
+        scraped = scrape(body.url)
     except ValueError as exc:
         # URL invalide ou contenu non-HTML
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except httpx.TimeoutException as exc:
         raise HTTPException(
             status_code=503,
-            detail=f"Le site n'a pas repondu dans le delai imparti : {request.url}",
+            detail=f"Le site n'a pas repondu dans le delai imparti : {body.url}",
         ) from exc
     except httpx.ConnectError as exc:
         raise HTTPException(
             status_code=503,
-            detail=f"Impossible de joindre le site : {request.url}",
+            detail=f"Impossible de joindre le site : {body.url}",
         ) from exc
     except httpx.HTTPStatusError as exc:
         raise HTTPException(
@@ -109,11 +157,13 @@ def analyze(request: AnalyzeRequest) -> CompanyAnalysis:
     except httpx.TooManyRedirects as exc:
         raise HTTPException(
             status_code=503,
-            detail=f"Trop de redirections pour atteindre : {request.url}",
+            detail=f"Trop de redirections pour atteindre : {body.url}",
         ) from exc
-    except Exception as exc:
-        logger.exception("Erreur inattendue lors du scraping de %s", request.url)
-        raise HTTPException(status_code=500, detail="Erreur interne lors de la collecte.") from exc
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Erreur reseau lors du scraping : {body.url}",
+        ) from exc
 
     # --- Etapes 2 & 3 : detection (non-LLM, ne levent pas d'exception) ---
     tech_stack = detect_tech_stack(scraped)
@@ -125,7 +175,7 @@ def analyze(request: AnalyzeRequest) -> CompanyAnalysis:
     # --- Etape 5 : scoring (pur calcul, ne leve pas d'exception) ---
     score = compute_score(profile, tech_stack, gtm_signals)
 
-    return CompanyAnalysis(
+    result = CompanyAnalysis(
         url=scraped["final_url"],
         page_title=scraped["page_title"],
         favicon_url=scraped["favicon_url"],
@@ -135,3 +185,11 @@ def analyze(request: AnalyzeRequest) -> CompanyAnalysis:
         score=score,
         error=None,
     )
+
+    # --- Mise en cache avec eviction de l'entree la plus ancienne si plafond atteint ---
+    if len(_analysis_cache) >= CACHE_MAX_ENTRIES:
+        oldest = min(_analysis_cache, key=lambda k: _analysis_cache[k][0])
+        del _analysis_cache[oldest]
+    _analysis_cache[cache_key] = (time.monotonic(), result)
+
+    return result

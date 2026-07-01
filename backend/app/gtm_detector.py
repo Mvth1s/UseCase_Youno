@@ -167,8 +167,6 @@ _DEMO_HTML_PATTERNS: list[str] = [
     "see a demo", "see it in action",
     "demander une demo", "reserver une demo",
     "schedule demo", "book your demo",
-    "get started for free",    # souvent equivalent a un acces demo
-    "start for free",
 ]
 
 # Mots-cles dans le chemin des liens internes signalant une page recrutement

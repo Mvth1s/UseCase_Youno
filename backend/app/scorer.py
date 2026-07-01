@@ -176,7 +176,7 @@ def _factor_audience(profile: CompanyProfile) -> ScoreFactor:
     audience: str = (profile.audience or "").strip()
     if audience == "B2B":
         points = POINTS_AUDIENCE_B2B
-    elif audience.lower() == "mixed":
+    elif audience == "mixed":
         points = POINTS_AUDIENCE_MIXED
     else:
         # B2C explicite ou champ vide (profiler en echec) -> 0 pt
