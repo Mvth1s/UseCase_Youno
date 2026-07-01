@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 
 import httpx
 from dotenv import load_dotenv
@@ -56,6 +57,27 @@ app.add_middleware(
 )
 
 # ---------------------------------------------------------------------------
+# Cache memoire TTL 1h
+# Adapte au free tier Render (meme process, pas de Redis).
+# Limite connue : cache perdu au redemarrage du worker.
+# ---------------------------------------------------------------------------
+
+# Duree de validite d'une entree (en secondes)
+CACHE_TTL_SECONDS: int = 3600
+
+# Plafond d'entrees pour eviter une fuite memoire sur le free tier
+CACHE_MAX_ENTRIES: int = 200
+
+# Structure : url_normalisee -> (monotonic_timestamp, CompanyAnalysis)
+_analysis_cache: dict[str, tuple[float, "CompanyAnalysis"]] = {}
+
+
+def _cache_key(url: str) -> str:
+    """Normalise l'URL en cle de cache stable (casse et slash finaux ignores)."""
+    return url.strip().lower().rstrip("/")
+
+
+# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 
@@ -86,6 +108,17 @@ def analyze(request: AnalyzeRequest) -> CompanyAnalysis:
         HTTPException 503: site injoignable (DNS, timeout, statut non-2xx).
         HTTPException 500: erreur interne inattendue.
     """
+    # --- Cache : court-circuit si resultat frais disponible (< 1h) ---
+    cache_key = _cache_key(request.url)
+    cached = _analysis_cache.get(cache_key)
+    if cached is not None:
+        ts, cached_result = cached
+        if time.monotonic() - ts < CACHE_TTL_SECONDS:
+            logger.info("[cache] Hit pour %s", cache_key)
+            return cached_result
+        # Entree expiree : nettoyage immediat
+        del _analysis_cache[cache_key]
+
     # --- Etape 1 : collecte ---
     try:
         scraped = scrape(request.url)
@@ -126,7 +159,7 @@ def analyze(request: AnalyzeRequest) -> CompanyAnalysis:
     # --- Etape 5 : scoring (pur calcul, ne leve pas d'exception) ---
     score = compute_score(profile, tech_stack, gtm_signals)
 
-    return CompanyAnalysis(
+    result = CompanyAnalysis(
         url=scraped["final_url"],
         page_title=scraped["page_title"],
         favicon_url=scraped["favicon_url"],
@@ -136,3 +169,11 @@ def analyze(request: AnalyzeRequest) -> CompanyAnalysis:
         score=score,
         error=None,
     )
+
+    # --- Mise en cache avec eviction de l'entree la plus ancienne si plafond atteint ---
+    if len(_analysis_cache) >= CACHE_MAX_ENTRIES:
+        oldest = min(_analysis_cache, key=lambda k: _analysis_cache[k][0])
+        del _analysis_cache[oldest]
+    _analysis_cache[cache_key] = (time.monotonic(), result)
+
+    return result
