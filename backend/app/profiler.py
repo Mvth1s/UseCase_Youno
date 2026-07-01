@@ -46,10 +46,18 @@ MISTRAL_TIMEOUT: int = 20
 PROMPT_TEXT_MAX_CHARS: int = 2000
 
 # Version du prompt systeme — incrementer si SYSTEM_PROMPT change
-PROMPT_VERSION: str = "1.0"
+PROMPT_VERSION: str = "1.1"
 
 # Valeurs autorisees pour le champ audience
 VALID_AUDIENCE_VALUES: frozenset[str] = frozenset({"B2B", "B2C", "mixed"})
+
+# Valeurs canoniques autorisees pour le champ estimated_size (conformes au scorer)
+VALID_SIZE_VALUES: frozenset[str] = frozenset({
+    "startup <50",
+    "PME 50-500",
+    "ETI 500-5000",
+    "grande entreprise >5000",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -68,11 +76,12 @@ Le JSON doit respecter exactement ce schema :
   "name": "Nom commercial de l'entreprise",
   "description": "Description en 1 a 2 phrases de ce que fait l'entreprise",
   "sector": "Secteur d'activite (ex: Fintech, SaaS RH, CRM, E-commerce, Cybersecurite...)",
-  "estimated_size": "Taille estimee parmi : startup <50, PME 50-500, ETI 500-5000, grande entreprise >5000",
+  "estimated_size": "EXACTEMENT l'une de ces 4 valeurs : \"startup <50\", \"PME 50-500\", \"ETI 500-5000\", \"grande entreprise >5000\"",
   "audience": "B2B ou B2C ou mixed"
 }
 
 Regles strictes :
+- "estimated_size" doit valoir EXACTEMENT l'une de ces 4 chaines (respecter la casse et la ponctuation exactes) : "startup <50", "PME 50-500", "ETI 500-5000", "grande entreprise >5000". Aucune autre valeur n'est acceptee.
 - "audience" doit valoir exactement "B2B", "B2C" ou "mixed" (respecter la casse exacte).
 - Si une information est incertaine, fais une estimation raisonnee plutot que de laisser vide.
 - Ne jamais ajouter de champs supplementaires au schema.
@@ -228,6 +237,46 @@ def _parse_llm_response(raw_content: str) -> dict:
         cleaned,
         0,
     )
+
+
+def _sanitize_size(value: str) -> str:
+    """
+    Normalise la valeur du champ 'estimated_size' aux quatre valeurs canoniques.
+
+    Gere les variantes renvoyees par le LLM malgre le prompt contraint :
+    ex. "PME" -> "PME 50-500", "startup" -> "startup <50".
+    L'ordre des tests suit la specificite decroissante pour eviter les faux positifs.
+
+    Args:
+        value: valeur brute renvoyee par le LLM.
+
+    Returns:
+        L'une des 4 valeurs canoniques de VALID_SIZE_VALUES, ou "" si non identifiable.
+    """
+    if not value or not value.strip():
+        return ""
+
+    stripped: str = value.strip()
+
+    # Valeur deja canonique : court-circuit
+    if stripped in VALID_SIZE_VALUES:
+        return stripped
+
+    lower: str = stripped.lower()
+
+    # Ordre : du plus specifique au plus general pour eviter les collisions
+    if "startup" in lower or "<50" in lower:
+        return "startup <50"
+    if "eti" in lower or "500-5000" in lower:
+        return "ETI 500-5000"
+    if "pme" in lower or "50-500" in lower:
+        return "PME 50-500"
+    if "grande" in lower or ">5000" in lower or "5000+" in lower or "large enterprise" in lower:
+        return "grande entreprise >5000"
+
+    # Valeur hors perimetre : le scorer attribuera 0 pt plutot que de scorer faussement
+    logger.warning("[profiler] Valeur estimated_size non reconnue : %r — champ laisse vide.", value)
+    return ""
 
 
 def _sanitize_audience(value: str) -> str:
@@ -437,13 +486,15 @@ def build_profile(data: ScrapedData) -> CompanyProfile:
     # 6. Construction du CompanyProfile avec valeurs par defaut
     # ------------------------------------------------------------------
     raw_audience: str = parsed.get("audience", "")
-    # Normaliser la valeur audience ou laisser vide si le champ est absent
     audience: str = _sanitize_audience(raw_audience) if raw_audience else ""
+
+    raw_size: str = parsed.get("estimated_size", "")
+    estimated_size: str = _sanitize_size(raw_size) if raw_size else ""
 
     return CompanyProfile(
         name=parsed.get("name", ""),
         description=parsed.get("description", ""),
         sector=parsed.get("sector", ""),
-        estimated_size=parsed.get("estimated_size", ""),
+        estimated_size=estimated_size,
         audience=audience,
     )
