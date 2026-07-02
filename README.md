@@ -69,21 +69,21 @@ Chaque etape produit un objet structure consomme par l'etape suivante. Seul `mai
 
 ## Choix techniques
 
-**Vue 3 + Vite** -- Framework front maîtrise, configuration zero-friction, build optimise en quelques secondes. Pour une SPA d'une seule page, ajouter Nuxt ou un routeur aurait ete une surcouche injustifiee. Vite 8 propose un build tres rapide avec des bundles optimises sans configuration supplementaire.
+**Vue 3 + Vite** -- Framework front maîtrise, configuration zero-friction, build optimise en quelques secondes. L'application n'expose qu'un seul ecran utile (analyser une URL) decline en quatre etats (idle, loading, resultat, erreur) geres par un simple `ref` dans `App.vue`, sans navigation entre routes ni besoin de deep-linking : Vue Router ou Nuxt resteraient une surcouche injustifiee. La complexite reelle est absorbee par la composition de composants (`ResultView` decoupe en `ProfileCard`, `ScoreCard`, `GtmCard`, `TechStackCard`), pas par du routage. Vite 8 propose un build tres rapide avec des bundles optimises sans configuration supplementaire.
 
 **FastAPI** -- Typage natif via Pydantic, documentation Swagger generee automatiquement, validation stricte des entrees/sorties. Idéal pour un endpoint unique avec un contrat d'API formalise. La gestion des erreurs explicite (HTTP 400/503 selon la cause) est triviale a implementer avec les `HTTPException` FastAPI.
 
-**Mistral AI** -- Un seul appel LLM dans toute la chaine (le module `profiler.py`). Ce choix est delibere : il limite le cout (une requete Mistral par analyse), la latence (pas de chaine d'agents), et le risque de panne (les etapes de detection sont 100 % non-LLM et toujours disponibles). `mistral-small-latest` offre un bon ratio qualite/cout/latence pour une tache de qualification structuree avec JSON force.
+**Mistral AI** -- Un seul appel LLM dans toute la chaine (le module `profiler.py`). Ce choix est delibere : il limite le cout (une requete Mistral par analyse), la latence (pas de chaine d'agents), et le risque de panne (les etapes de detection sont 100 % non-LLM et toujours disponibles). `mistral-small-latest` offre un bon ratio qualite/cout/latence pour une tache de qualification structuree avec JSON force (le modele est contraint a repondre selon un schema JSON strict et valide automatiquement, plutot qu'en texte libre a parser a la main).
 
-**httpx + BeautifulSoup** -- httpx permet le controle fin des redirections, necessaire pour la protection anti-SSRF (chaque saut de redirection est revalide). Le streaming du body limite la consommation memoire sur les pages volumineuses. BeautifulSoup avec le parseur `html.parser` est robuste sans dependance systeme. Playwright ou Selenium n'ont pas ete retenus : le rendu JavaScript ajoute plusieurs secondes de latence et complexifie considerablement le deploiement, pour un gain marginal sur la majorite des sites.
+**httpx + BeautifulSoup** -- httpx permet le controle fin des redirections, necessaire pour la protection anti-SSRF (Server-Side Request Forgery : sans verification, une URL malveillante pourrait forcer le serveur a interroger des ressources internes comme le reseau cloud ou `localhost` ; chaque saut de redirection est donc revalide). Le streaming du body limite la consommation memoire sur les pages volumineuses. BeautifulSoup avec le parseur `html.parser` est robuste sans dependance systeme. Playwright ou Selenium n'ont pas ete retenus : le rendu JavaScript ajoute plusieurs secondes de latence et complexifie considerablement le deploiement, pour un gain marginal sur la majorite des sites.
 
 **Detection par signatures (non-LLM)** -- Toute la detection tech stack et GTM repose sur des correspondances de patterns dans le HTML brut et les headers HTTP. Ce choix garantit la transparence (chaque resultat est la preuve directe d'une signature presente dans la source), la vitesse (pas d'appel reseau supplementaire), et l'extensibilite (ajouter un outil = ajouter une ligne dans la liste correspondante, sans modifier la logique de detection).
 
-**Cache memoire TTL 1h** -- Un dictionnaire en memoire dans le worker Uvicorn evite de re-scraper et de re-appeler Mistral pour la meme URL dans la meme heure. C'est volontairement simple : pas de Redis (surcouche injustifiee pour un MVP), pas de persistance entre redemarrages du worker (documentee comme limite connue). L'eviction LRU sur un plafond de 200 entrees previent les fuites memoire sur le free tier.
+**Cache memoire TTL 1h** (time-to-live : duree de vie d'une entree avant expiration automatique) -- Un dictionnaire en memoire dans le worker Uvicorn evite de re-scraper et de re-appeler Mistral pour la meme URL dans la meme heure. C'est volontairement simple : pas de Redis (surcouche injustifiee pour un MVP), pas de persistance entre redemarrages du worker (documentee comme limite connue). L'eviction LRU (Least Recently Used : l'entree la moins recemment consultee est supprimee en premier) sur un plafond de 200 entrees previent les fuites memoire sur le free tier.
 
 **Rate limiting (slowapi, 10 req/min par IP)** -- Un seul appel LLM coute entre 0,001 et 0,01 dollar. Sans protection, un bot peut vider le credit Mistral en quelques minutes. slowapi s'integre en deux lignes au-dessus de la route sans modifier la logique metier ; la reponse 429 est standard et geree explicitement par le frontend.
 
-**Netlify + Render** -- Netlify pour le frontend : deploiement automatique depuis Git, CDN mondial, TLS et redirections SPA configures par `netlify.toml`. Render pour le backend : deploiement depuis `render.yaml` (Blueprint), restart automatique, plan gratuit suffisant pour un MVP.
+**Netlify + Render** -- Netlify pour le frontend : deploiement automatique depuis Git, CDN mondial, TLS et redirections SPA configures par `netlify.toml`. Render pour le backend : deploiement depuis `render.yaml` (Blueprint, le format de configuration declarative de Render qui evite de ressaisir les parametres manuellement dans l'interface), restart automatique, plan gratuit suffisant pour un MVP.
 
 ---
 
@@ -117,6 +117,19 @@ curl -I http://localhost:8000/health
 curl -X POST http://localhost:8000/analyze \
   -H "Content-Type: application/json" \
   -d '{"url": "stripe.com"}'
+```
+
+Extrait de la reponse (schema complet et description de chaque champ dans `backend/API_CONTRACT.md`) :
+
+```json
+{
+  "url": "https://stripe.com",
+  "page_title": "Stripe | Financial Infrastructure to Grow Your Revenue",
+  "tech_stack": { "frameworks": ["React", "Next.js"], "cdn": ["Cloudflare"] },
+  "gtm_signals": { "chat_tools": ["Intercom"], "has_pricing_page": true },
+  "profile": { "name": "Stripe", "sector": "Fintech / Paiements", "audience": "B2B" },
+  "score": { "score": 87, "label": "Cible ideale B2B SaaS" }
+}
 ```
 
 Tests unitaires (105 tests sur les trois modules deterministes) :
@@ -255,7 +268,6 @@ UseCase_Youno/
 |   +-- .env.example          Template des variables d'environnement
 |
 +-- CLAUDE.md                 Instructions pour les agents Claude Code
-+-- TASKS.md                  Suivi des taches (CTO)
 ```
 
 ---
