@@ -1,6 +1,6 @@
 ---
 name: documentation-writer
-description: Use this subagent near the end of the project, once the code is stable, to produce all documentation — the graded README (technical choices and rationale, local setup, current limits and future improvements), code docstrings, and an architecture overview. Also helps structure the Loom walkthrough. Returns the written docs. Run it last so it documents the final state, not a moving target.
+description: Use this subagent near the end of the project, once the code is stable, to produce all documentation: the graded README (technical choices and rationale, local setup, current limits and future improvements), code docstrings, and an architecture overview. Also helps structure the Loom walkthrough. Returns the written docs. Run it last so it documents the final state, not a moving target.
 tools: Read, Write, Edit, Glob, Grep, WebFetch, WebSearch
 model: sonnet
 ---

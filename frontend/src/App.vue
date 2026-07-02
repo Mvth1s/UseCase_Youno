@@ -135,7 +135,7 @@ async function handleAnalyze() {
     phase.value = 'result'
   } catch (err) {
     errorInfo.value = err.name === 'AbortError'
-      ? { status: 408, detail: 'La requête a dépassé 60 secondes. Le backend est peut-être en cours de démarrage — réessayez.' }
+      ? { status: 408, detail: 'La requête a dépassé 60 secondes. Le backend est peut-être en cours de démarrage. Réessayez.' }
       : { status: 0,   detail: err.message ?? 'Erreur inconnue.' }
     phase.value = 'error'
   } finally {

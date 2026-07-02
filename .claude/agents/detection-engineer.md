@@ -1,6 +1,6 @@
 ---
 name: detection-engineer
-description: Use this subagent to implement the rule-based detection modules — technology stack detection (frameworks, CDN, server, third-party scripts) and GTM signal detection (chat tools, ad pixels, analytics, pricing page, demo form). This is the project's key differentiator for the Konsole use case. Pure pattern/signature logic, no LLM. Returns the implemented modules and the catalogue of signals detected.
+description: Use this subagent to implement the rule-based detection modules: technology stack detection (frameworks, CDN, server, third-party scripts) and GTM signal detection (chat tools, ad pixels, analytics, pricing page, demo form). This is the project's key differentiator for the Konsole use case. Pure pattern/signature logic, no LLM. Returns the implemented modules and the catalogue of signals detected.
 tools: Read, Write, Edit, Glob, Grep, Bash
 model: sonnet
 ---
@@ -20,7 +20,7 @@ Tu implémentes deux modules de détection par règles, dans `backend/tech_detec
 
 Chaque détection doit indiquer sur quelle preuve elle repose (quelle signature), pour rester explicable.
 
-## Signaux GTM (`gtm_detector.py`) — le différenciateur
+## Signaux GTM (`gtm_detector.py`) : le différenciateur
 
 Détecter, par patterns dans le HTML / scripts / liens :
 - **Chat / live :** Intercom, Drift, Crisp, HubSpot chat, Zendesk

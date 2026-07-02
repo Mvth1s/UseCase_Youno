@@ -28,7 +28,7 @@ const ERROR_MAP = {
   },
   408: {
     title: 'Délai dépassé',
-    message: 'La requête a dépassé 60 secondes. Le backend est peut-être en cours de démarrage — réessayez.',
+    message: 'La requête a dépassé 60 secondes. Le backend est peut-être en cours de démarrage. Réessayez.',
     bg: '#FBF3DE', iconColor: '#A9720B',
   },
   429: {
@@ -38,7 +38,7 @@ const ERROR_MAP = {
   },
   503: {
     title: 'Site injoignable',
-    message: "Nous n'avons pas réussi à joindre ce site. Il est peut-être temporairement indisponible — réessayez dans un instant.",
+    message: "Nous n'avons pas réussi à joindre ce site. Il est peut-être temporairement indisponible. Réessayez dans un instant.",
     bg: '#FBEAEA', iconColor: '#B54444',
   },
   500: {

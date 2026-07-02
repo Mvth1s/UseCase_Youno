@@ -1,6 +1,6 @@
 ---
 name: frontend-vue
-description: Use this subagent to build and refine the Vue 3 + Vite user interface — URL input, loading state (critical because of Render cold starts), clean rendering of the analysis result (company info, tech stack, GTM signals, score), and client-side error handling. Aims for a sober, readable UI, not an ambitious one. Returns the implemented components and how it consumes the API.
+description: Use this subagent to build and refine the Vue 3 + Vite user interface: URL input, loading state (critical because of Render cold starts), clean rendering of the analysis result (company info, tech stack, GTM signals, score), and client-side error handling. Aims for a sober, readable UI, not an ambitious one. Returns the implemented components and how it consumes the API.
 tools: Read, Write, Edit, Glob, Grep, Bash
 model: sonnet
 ---
