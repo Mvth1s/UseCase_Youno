@@ -146,7 +146,7 @@ Endpoint de sante pour les healthchecks Render. Supporte GET et HEAD.
 | Code | Situation                                                                 |
 |------|---------------------------------------------------------------------------|
 | 400  | URL manquante, invalide ou contenu non-HTML.                             |
-| 422  | Corps de requete maleforme — validation Pydantic echouee.               |
+| 422  | Corps de requete maleforme : validation Pydantic echouee.               |
 | 429  | Limite de 10 requetes par minute par IP depassee.                       |
 | 503  | Site cible injoignable (timeout, DNS introuvable, erreur HTTP, redirections excessives). |
 | 500  | Erreur interne inattendue.                                               |

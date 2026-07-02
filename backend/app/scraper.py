@@ -35,7 +35,7 @@ HTTP_TIMEOUT: int = 10
 # Nombre maximum de redirections suivies
 MAX_REDIRECTS: int = 5
 
-# Taille maximale du body accepte (5 Mo) — protege contre les reponses geantes
+# Taille maximale du body accepte (5 Mo) : protege contre les reponses geantes
 MAX_RESPONSE_SIZE: int = 5 * 1024 * 1024
 
 # User-agent realiste pour eviter les blocages basiques anti-bot
@@ -383,7 +383,7 @@ def scrape(url: str) -> ScrapedData:
                 final_url = str(response.url)
                 status_code = response.status_code
 
-                # Lire le body chunk par chunk — rejette les reponses > MAX_RESPONSE_SIZE
+                # Lire le body chunk par chunk : rejette les reponses > MAX_RESPONSE_SIZE
                 # sans les charger entierement en memoire (protege contre memory amplification)
                 chunks: list[bytes] = []
                 total_bytes = 0

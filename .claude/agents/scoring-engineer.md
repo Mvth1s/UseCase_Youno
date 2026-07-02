@@ -1,6 +1,6 @@
 ---
 name: scoring-engineer
-description: Use this subagent to implement the bonus fit-scoring module — a transparent, rule-based score answering "fit for a company selling to B2B SaaS". It combines outputs from the detection and profiler modules into an explainable weighted score with a breakdown of contributing factors. No LLM. Returns the module and the documented scoring logic.
+description: Use this subagent to implement the bonus fit-scoring module: a transparent, rule-based score answering "fit for a company selling to B2B SaaS". It combines outputs from the detection and profiler modules into an explainable weighted score with a breakdown of contributing factors. No LLM. Returns the module and the documented scoring logic.
 tools: Read, Write, Edit, Glob, Grep, Bash
 model: sonnet
 ---

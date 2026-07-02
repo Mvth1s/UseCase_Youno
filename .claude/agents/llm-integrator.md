@@ -1,6 +1,6 @@
 ---
 name: llm-integrator
-description: Use this subagent to implement the single LLM-powered module of the pipeline — the Company Profiler that calls the Mistral API to produce structured company intelligence (name, description, sector, approximate size, B2B/B2C audience) from cleaned page content. It owns forced-JSON prompting, defensive parsing, and graceful fallback when the model returns malformed output. Returns the module and the exact prompt used.
+description: Use this subagent to implement the single LLM-powered module of the pipeline: the Company Profiler that calls the Mistral API to produce structured company intelligence (name, description, sector, approximate size, B2B/B2C audience) from cleaned page content. It owns forced-JSON prompting, defensive parsing, and graceful fallback when the model returns malformed output. Returns the module and the exact prompt used.
 tools: Read, Write, Edit, Glob, Grep, Bash
 model: sonnet
 ---

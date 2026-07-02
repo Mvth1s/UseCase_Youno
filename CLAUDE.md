@@ -29,7 +29,7 @@ Pipeline séquentielle dans le backend, un seul endpoint `POST /analyze` qui orc
 1. **Collecte** (non-LLM) : fetch HTML via httpx, extraction title/meta/OG/favicon/liens/headers, gestion d'erreurs
 2. **Détection tech stack** (non-LLM) : signatures dans HTML + headers
 3. **Détection signaux GTM** (non-LLM) : chat (Intercom, Drift, Crisp), pixels (Meta, LinkedIn, Google Ads), analytics (GA4, Segment, Amplitude), page pricing, formulaire démo
-4. **Profiler** (LLM Mistral) : nom, description, secteur, taille, audience B2B/B2C — sortie JSON forcée et parsée défensivement
+4. **Profiler** (LLM Mistral) : nom, description, secteur, taille, audience B2B/B2C ; sortie JSON forcée et parsée défensivement
 5. **Scoring** (non-LLM) : logique de règles pondérées, explicable
 
 Un seul appel LLM dans toute la chaîne (le Profiler) pour maîtriser coût, latence et risque de panne.
@@ -55,7 +55,7 @@ L'évaluateur regarde : est-ce que ça tourne en live, qualité du code (structu
 
 ## Rôles
 
-Le pilotage humain est assuré par le CTO (Mathis). Les tâches sont suivies dans `TASKS.md`. Les subagents disponibles sont dans `.claude/agents/`. Voir leurs descriptions pour savoir quand déléguer.
+Le pilotage humain est assuré par le CTO (Mathis). Le projet est terminé (`TASKS.md` a été supprimé une fois le pilotage clos) ; le travail restant est de la maintenance ou de l'extension, pas du bootstrap. Les subagents disponibles sont dans `.claude/agents/`. Voir leurs descriptions pour savoir quand déléguer.
 
 ---
 
@@ -75,6 +75,13 @@ uvicorn app.main:app --reload  # http://localhost:8000
 
 Point d'entrée API : `POST http://localhost:8000/analyze` avec body `{ "url": "stripe.com" }`.
 
+Vérification rapide sans passer par le frontend :
+
+```bash
+curl http://localhost:8000/health
+curl -X POST http://localhost:8000/analyze -H "Content-Type: application/json" -d '{"url": "stripe.com"}'
+```
+
 ### Frontend (Vue 3 + Vite)
 
 ```bash
@@ -85,11 +92,24 @@ npm run dev                    # http://localhost:5173
 npm run build                  # build de prod
 ```
 
+### Tests backend
+
+105 tests unitaires couvrent `scorer.py`, `tech_detector.py` et `gtm_detector.py` (logique déterministe, sans appel réseau ni LLM ; `scraper.py` et `profiler.py` n'ont pas de suite dédiée).
+
+```bash
+cd backend
+pytest tests/ -v                                    # suite complète
+pytest tests/test_scorer.py -v                      # un seul module
+pytest tests/test_scorer.py -k "b2b_audience" -v    # un seul cas par nom
+```
+
+La CI GitHub Actions (`.github/workflows/backend.yml`, `frontend.yml`) est scindée par dossier via des filtres `paths:` : un changement dans `backend/**` ne déclenche pas le workflow frontend et inversement. Le workflow backend vérifie la syntaxe (`py_compile`), les imports (avec une clé Mistral factice), puis lance `pytest`. Le workflow frontend fait `npm ci` + `npm run build` et vérifie que `dist/index.html` existe.
+
 ---
 
 ## Structure des modules backend
 
-Chaque fichier a une responsabilité unique — ne pas mélanger.
+Chaque fichier a une responsabilité unique : ne pas mélanger.
 
 | Fichier | Rôle |
 |---|---|
@@ -102,6 +122,13 @@ Chaque fichier a une responsabilité unique — ne pas mélanger.
 | `app/models.py` | Modèles Pydantic entrée/sortie |
 
 La route `main.py` appelle les modules dans l'ordre scraper → tech_detector → gtm_detector → profiler → scorer et assemble `CompanyAnalysis`. Aucun module n'importe un autre module métier : seul `main.py` orchestre.
+
+### Comportements runtime de `/analyze` (non déductibles d'un seul fichier)
+
+- **Cache mémoire TTL 1h** dans `main.py` : dict process-local `url_normalisée → (timestamp, CompanyAnalysis)`, clé = URL en minuscules sans slash final. Éviction LRU au-delà de 200 entrées. Ne survit pas à un redémarrage du worker (limite connue, documentée dans le README) : ne pas confondre un cache-hit avec un re-scrape lors du debug.
+- **Rate limiting** : `slowapi`, 10 req/min par IP sur `/analyze` uniquement (pas sur `/health`). Réponse 429 automatique, gérée explicitement côté frontend.
+- **Mapping erreurs → HTTP** dans `main.py` : `ValueError` du scraper (URL invalide, contenu non-HTML) → 400 ; toutes les exceptions `httpx.*` (timeout, connexion, statut HTTP, redirections) → 503 avec message contextualisé ; erreur de validation Pydantic → 422 (géré par FastAPI, pas de code custom). `profiler.py` ne lève jamais : son fallback interne garantit qu'une panne LLM ne casse pas la pipeline, elle produit juste un `CompanyProfile` partiel.
+- Toute évolution du schéma dans `app/models.py` doit être répercutée dans `backend/API_CONTRACT.md`, qui fait foi pour le contrat JSON frontend/backend (y compris les valeurs canoniques de `estimated_size` et la liste des 8 facteurs de scoring).
 
 ---
 

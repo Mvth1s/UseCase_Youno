@@ -1,6 +1,6 @@
 ---
 name: code-reviewer
-description: Use this subagent after any module is implemented or modified, to review the code against the four explicitly graded criteria — structure, readability, logical separation, and error handling. It is read-only: it critiques and prioritizes issues, it does NOT rewrite code. Returns a prioritized findings report (Critical / Warning / Suggestion) with file and line references.
+description: Use this subagent after any module is implemented or modified, to review the code against the four explicitly graded criteria: structure, readability, logical separation, and error handling. It is read-only: it critiques and prioritizes issues, it does NOT rewrite code. Returns a prioritized findings report (Critical / Warning / Suggestion) with file and line references.
 tools: Read, Grep, Glob, Bash
 model: sonnet
 ---

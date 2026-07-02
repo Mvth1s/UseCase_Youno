@@ -1,12 +1,12 @@
-# Konsole Company Analyzer — Frontend
+# Konsole Company Analyzer - Frontend
 
 Interface Vue 3 + Vite de l'analyseur d'entreprises Konsole.
 
 ## Stack
 
 - **Vue 3** (Composition API, `<script setup>`)
-- **Vite** — build et dev server
-- **Google Fonts** — Manrope (corps) + Source Serif 4 (titres)
+- **Vite** : build et dev server
+- **Google Fonts** : Manrope (corps) + Source Serif 4 (titres)
 
 ## Architecture
 

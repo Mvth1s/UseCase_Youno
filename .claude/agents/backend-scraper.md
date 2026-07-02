@@ -1,6 +1,6 @@
 ---
 name: backend-scraper
-description: Use this subagent to implement the data collection layer — fetching a website's HTML with httpx and extracting structured raw data (title, meta, Open Graph, favicon, links, HTTP headers) with BeautifulSoup. It owns all fetch-related error handling (timeout, non-200 status, invalid URL, redirects, URL normalization). Returns the implemented module plus a note on which real URLs were tested.
+description: Use this subagent to implement the data collection layer: fetching a website's HTML with httpx and extracting structured raw data (title, meta, Open Graph, favicon, links, HTTP headers) with BeautifulSoup. It owns all fetch-related error handling (timeout, non-200 status, invalid URL, redirects, URL normalization). Returns the implemented module plus a note on which real URLs were tested.
 tools: Read, Write, Edit, Glob, Grep, Bash
 model: sonnet
 ---
