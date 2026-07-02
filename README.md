@@ -214,6 +214,8 @@ Deux workflows GitHub Actions declenchent automatiquement sur `push` et `pull_re
 
 Render endort les services gratuits apres 15 minutes d'inactivite. Le premier appel apres une periode de sommeil prend 30 a 60 secondes. Le frontend affiche un etat de chargement explicite et un timeout de 60 secondes pour absorber ce delai cote utilisateur.
 
+En usage normal, un moniteur UptimeRobot ping `/health` toutes les 5 minutes, ce qui maintient le backend eveille en continu : le delai de 30 a 60 secondes ne se produit que si ce moniteur est desactive ou indisponible.
+
 Pour maintenir le backend eveille, un script de warm-up est inclus :
 
 ```bash
