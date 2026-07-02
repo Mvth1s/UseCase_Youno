@@ -1,6 +1,6 @@
 ---
 name: devops-deploy
-description: Use this subagent to handle deployment and production config — Netlify for the frontend, Render free tier for the backend, environment variables, production CORS, and a free uptime monitoring setup to mitigate Render cold starts. It makes the app reliably reachable via a public link, the single most-weighted evaluation criterion. Returns the deployment steps and live URLs once configured.
+description: Use this subagent to handle deployment and production config: Netlify for the frontend, Render free tier for the backend, environment variables, production CORS, and a free uptime monitoring setup to mitigate Render cold starts. It makes the app reliably reachable via a public link, the single most-weighted evaluation criterion. Returns the deployment steps and live URLs once configured.
 tools: Read, Write, Edit, Glob, Grep, Bash
 model: sonnet
 ---

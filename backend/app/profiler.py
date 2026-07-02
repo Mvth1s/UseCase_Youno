@@ -42,7 +42,7 @@ MISTRAL_TIMEOUT: int = 20
 # (maitrise le budget de tokens ; les metadonnees structurees passent en tete)
 PROMPT_TEXT_MAX_CHARS: int = 2000
 
-# Version du prompt systeme — incrementer si SYSTEM_PROMPT change
+# Version du prompt systeme : incrementer si SYSTEM_PROMPT change
 PROMPT_VERSION: str = "1.1"
 
 # Valeurs autorisees pour le champ audience
@@ -204,7 +204,7 @@ def _parse_llm_response(raw_content: str) -> dict:
         json.JSONDecodeError: si le contenu n'est pas parsable apres toutes les passes.
     """
     if not raw_content or not raw_content.strip():
-        raise ValueError("Reponse LLM vide — aucun contenu a parser.")
+        raise ValueError("Reponse LLM vide : aucun contenu a parser.")
 
     cleaned: str = raw_content.strip()
 
@@ -225,7 +225,7 @@ def _parse_llm_response(raw_content: str) -> dict:
     # Passe 3 : extraire le premier objet JSON trouvable dans le texte
     obj_match = re.search(r"\{.*\}", cleaned, re.DOTALL)
     if obj_match:
-        # Leve json.JSONDecodeError si toujours invalide — sera capturee par l'appelant
+        # Leve json.JSONDecodeError si toujours invalide ; sera capturee par l'appelant
         return json.loads(obj_match.group(0))
 
     raise json.JSONDecodeError(
@@ -271,7 +271,7 @@ def _sanitize_size(value: str) -> str:
         return "grande entreprise >5000"
 
     # Valeur hors perimetre : le scorer attribuera 0 pt plutot que de scorer faussement
-    logger.warning("[profiler] Valeur estimated_size non reconnue : %r — champ laisse vide.", value)
+    logger.warning("[profiler] Valeur estimated_size non reconnue : %r, champ laisse vide.", value)
     return ""
 
 
@@ -303,7 +303,7 @@ def _build_fallback_profile(data: ScrapedData) -> CompanyProfile:
 
     Deduit le nom commercial du domaine et la description depuis les metadonnees
     disponibles. Les champs qui requierent une inference LLM restent vides.
-    Le profil est toujours valide — jamais d'exception propagee.
+    Le profil est toujours valide : jamais d'exception propagee.
 
     Args:
         data: donnees scrappees de la page.
@@ -357,7 +357,7 @@ def build_profile(data: ScrapedData) -> CompanyProfile:
     try:
         api_key: str = _get_api_key()
     except RuntimeError as exc:
-        logger.error("[profiler] Cle API absente ou invalide : %s — retour fallback.", exc)
+        logger.error("[profiler] Cle API absente ou invalide : %s, retour fallback.", exc)
         return _build_fallback_profile(data)
 
     # ------------------------------------------------------------------
@@ -375,7 +375,7 @@ def build_profile(data: ScrapedData) -> CompanyProfile:
         "response_format": {"type": "json_object"},
         # Faible temperature : resultats plus deterministes et reproductibles
         "temperature": 0.1,
-        # Le profil JSON est court — limiter max_tokens reduit la latence et le cout
+        # Le profil JSON est court, limiter max_tokens reduit la latence et le cout
         "max_tokens": 512,
     }
 
@@ -397,20 +397,20 @@ def build_profile(data: ScrapedData) -> CompanyProfile:
         # Gestion explicite des codes d'erreur HTTP notables
         if response.status_code == 401:
             logger.error(
-                "[profiler] Cle API Mistral invalide (HTTP 401) — retour fallback."
+                "[profiler] Cle API Mistral invalide (HTTP 401), retour fallback."
             )
             return _build_fallback_profile(data)
 
         if response.status_code == 429:
-            # Quota depasse ou rate limit — non bloquant pour le reste du pipeline
+            # Quota depasse ou rate limit, non bloquant pour le reste du pipeline
             logger.warning(
-                "[profiler] Quota Mistral depasse (HTTP 429) — retour fallback."
+                "[profiler] Quota Mistral depasse (HTTP 429), retour fallback."
             )
             return _build_fallback_profile(data)
 
         if response.status_code >= 500:
             logger.error(
-                "[profiler] Erreur serveur Mistral (HTTP %d) — retour fallback.",
+                "[profiler] Erreur serveur Mistral (HTTP %d), retour fallback.",
                 response.status_code,
             )
             return _build_fallback_profile(data)
@@ -420,7 +420,7 @@ def build_profile(data: ScrapedData) -> CompanyProfile:
 
     except httpx.TimeoutException as exc:
         logger.error(
-            "[profiler] Timeout (%ds) lors de l'appel Mistral : %s — retour fallback.",
+            "[profiler] Timeout (%ds) lors de l'appel Mistral : %s, retour fallback.",
             MISTRAL_TIMEOUT,
             exc,
         )
@@ -428,13 +428,13 @@ def build_profile(data: ScrapedData) -> CompanyProfile:
 
     except httpx.ConnectError as exc:
         logger.error(
-            "[profiler] Connexion a l'API Mistral impossible : %s — retour fallback.", exc
+            "[profiler] Connexion a l'API Mistral impossible : %s, retour fallback.", exc
         )
         return _build_fallback_profile(data)
 
     except httpx.HTTPStatusError as exc:
         logger.error(
-            "[profiler] Erreur HTTP Mistral (HTTP %d) : %s — retour fallback.",
+            "[profiler] Erreur HTTP Mistral (HTTP %d) : %s, retour fallback.",
             exc.response.status_code,
             exc,
         )
@@ -460,7 +460,7 @@ def build_profile(data: ScrapedData) -> CompanyProfile:
 
     except (KeyError, IndexError, TypeError, ValueError) as exc:
         logger.error(
-            "[profiler] Structure de reponse Mistral inattendue : %s — retour fallback.", exc
+            "[profiler] Structure de reponse Mistral inattendue : %s, retour fallback.", exc
         )
         return _build_fallback_profile(data)
 
@@ -472,7 +472,7 @@ def build_profile(data: ScrapedData) -> CompanyProfile:
     except (json.JSONDecodeError, ValueError) as exc:
         logger.error(
             "[profiler] JSON LLM non parsable : %s | Contenu brut (200 chars) : %.200s"
-            " — retour fallback.",
+            ", retour fallback.",
             exc,
             raw_content,
         )
